@@ -8,6 +8,7 @@
   コース適性   : 0-15点 (コースデータなし時は5点)
 """
 from course_data import score_course
+from pedigree_data import score_pedigree
 
 
 def score_odds(odds: float | None) -> tuple[int, str]:
@@ -96,8 +97,16 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         horse.get("odds"),
         past_results,
     )
+    pedigree_score, pedigree_label = score_pedigree(
+        horse.get("venue_code", ""),
+        horse.get("surface", ""),
+        horse.get("distance", 0),
+        horse.get("sire", ""),
+        horse.get("dam_sire", ""),
+        horse.get("sex_age", ""),
+    )
 
-    total = odds_score + past_score + weight_score + course_score
+    total = odds_score + past_score + weight_score + course_score + pedigree_score
 
     return {
         "horse_number": horse.get("number", "?"),
@@ -112,6 +121,7 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
             "past_results": (past_score, past_label),
             "weight_change": (weight_score, weight_label),
             "course_fit": (course_score, course_label),
+            "pedigree": (pedigree_score, pedigree_label),
         },
     }
 

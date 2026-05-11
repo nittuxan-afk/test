@@ -201,16 +201,17 @@ def _try_extract_kinryo(row, horse: dict) -> None:
             pass
 
 
-def get_horse_past_results(horse_id: str, limit: int = 5) -> list[dict]:
+def get_horse_past_results(horse_id: str, limit: int = 5) -> dict:
     """
-    db.netkeiba.com から過去成績を取得する。
+    db.netkeiba.com から過去成績と血統情報を取得する。
 
     Args:
         horse_id: 馬ID (例: '2019105678')
         limit: 取得する最大レース数
 
     Returns:
-        成績リスト。各辞書のキー: date, venue, finish(着順int)
+        {'results': list[dict], 'sire': str, 'dam_sire': str}
+        results の各辞書のキー: date, venue, finish(着順int)
     """
     url = f"https://db.netkeiba.com/horse/{horse_id}/"
     logger.info("過去成績取得: %s", url)
@@ -219,12 +220,14 @@ def get_horse_past_results(horse_id: str, limit: int = 5) -> list[dict]:
         soup = _fetch(url)
     except requests.RequestException as e:
         logger.warning("過去成績取得失敗 (horse_id=%s): %s", horse_id, e)
-        return []
+        return {"results": [], "sire": "", "dam_sire": ""}
+
+    sire, dam_sire = _parse_pedigree(soup)
 
     table = _find_results_table(soup)
     if table is None:
         logger.warning("成績テーブルが見つかりません (horse_id=%s)", horse_id)
-        return []
+        return {"results": [], "sire": sire, "dam_sire": dam_sire}
 
     results = []
     rows = table.find_all("tr")[1:]  # ヘッダー行をスキップ
@@ -236,7 +239,56 @@ def get_horse_past_results(horse_id: str, limit: int = 5) -> list[dict]:
         if result:
             results.append(result)
 
-    return results
+    return {"results": results, "sire": sire, "dam_sire": dam_sire}
+
+
+def _parse_pedigree(soup: BeautifulSoup) -> tuple[str, str]:
+    """
+    血統テーブルから父(sire)・母父(dam_sire)を取得する。
+    Returns: (sire, dam_sire) -- 見つからない場合は空文字
+    """
+    sire = ""
+    dam_sire = ""
+
+    # Strategy 1: blood_table クラスの td から取得
+    blood_table = soup.find("table", class_="blood_table")
+    if blood_table:
+        tds = blood_table.find_all("td")
+        for td in tds:
+            cls_set = set(td.get("class", []))
+            a = td.find("a")
+            text = (a.get_text(strip=True) if a else td.get_text(strip=True))
+            if not text or text in ("－", "-", ""):
+                continue
+            # netkeibaの3世代血統表: b_01=父, b_03=母, b_05=母父 (構成により異なる)
+            if cls_set & {"b_01", "b_02"} and not sire:
+                sire = text
+            elif cls_set & {"b_04", "b_05", "b_06"} and not dam_sire:
+                dam_sire = text
+
+        # position-based fallback: odd cells = direct ancestors
+        if not sire and tds:
+            a = tds[0].find("a")
+            sire = (a.get_text(strip=True) if a else tds[0].get_text(strip=True))
+        if not dam_sire and len(tds) >= 4:
+            a = tds[3].find("a")
+            dam_sire = (a.get_text(strip=True) if a else tds[3].get_text(strip=True))
+
+    # Strategy 2: th/td ラベル検索 (「父」「母父」)
+    if not sire or not dam_sire:
+        for th in soup.find_all("th"):
+            label = th.get_text(strip=True)
+            sibling = th.find_next_sibling("td")
+            if not sibling:
+                continue
+            a = sibling.find("a")
+            val = (a.get_text(strip=True) if a else sibling.get_text(strip=True))
+            if label == "父" and not sire:
+                sire = val
+            elif label == "母父" and not dam_sire:
+                dam_sire = val
+
+    return sire, dam_sire
 
 
 def _find_results_table(soup: BeautifulSoup):

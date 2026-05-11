@@ -36,7 +36,10 @@ def predict():
         past = []
         if use_history and horse.get("horse_id"):
             try:
-                past = get_horse_past_results(horse["horse_id"])
+                data = get_horse_past_results(horse["horse_id"])
+                past = data["results"]
+                horse["sire"] = data.get("sire", "")
+                horse["dam_sire"] = data.get("dam_sire", "")
             except Exception:
                 pass
         scored.append(calculate_score(horse, past))

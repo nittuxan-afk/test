@@ -46,7 +46,10 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
         if use_history and horse.get("horse_id"):
             print(f"  [{horse['number']:>2}] {horse.get('name', '?')} の過去成績を取得中...", flush=True)
             try:
-                past = get_horse_past_results(horse["horse_id"])
+                data = get_horse_past_results(horse["horse_id"])
+                past = data["results"]
+                horse["sire"] = data.get("sire", "")
+                horse["dam_sire"] = data.get("dam_sire", "")
             except Exception as e:
                 logging.warning("過去成績取得失敗: %s", e)
         scored.append(calculate_score(horse, past))
@@ -57,7 +60,7 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
 def display(results: list[dict]) -> None:
     """予測結果をコンソールに表示する。"""
     has_odds = any(r["breakdown"]["odds"][0] > 0 for r in results)
-    max_pts = 80 if has_odds else 55
+    max_pts = 92 if has_odds else 67
 
     print(f"\n{'='*60}")
     print("  【 予想結果 】")
@@ -87,6 +90,7 @@ def display(results: list[dict]) -> None:
         print(f"    過去成績    : {bd['past_results'][0]:2d}点  {bd['past_results'][1]}")
         print(f"    馬体重変化  : {bd['weight_change'][0]:2d}点  {bd['weight_change'][1]}")
         print(f"    コース適性  : {bd['course_fit'][0]:2d}点  {bd['course_fit'][1]}")
+        print(f"    血統適性    : {bd['pedigree'][0]:2d}点  {bd['pedigree'][1]}")
         print(f"    合計        : {r['total_score']}点")
 
     print(f"\n{'='*60}")
