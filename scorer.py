@@ -1,11 +1,13 @@
 """
 各種要素にスコアを付けて馬の予想順位を算出するモジュール。
 
-スコアの内訳 (最大65点):
+スコアの内訳 (最大80点):
   単勝オッズ   : 0-25点
   過去成績(3走): 0-30点
   馬体重変化   : 0-10点 (データなし時は5点)
+  コース適性   : 0-15点 (コースデータなし時は5点)
 """
+from course_data import score_course
 
 
 def score_odds(odds: float | None) -> tuple[int, str]:
@@ -78,6 +80,7 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
 
     Args:
         horse: scraper.get_race_entries() が返す馬辞書
+               (venue_code, surface, distance フィールドを含む)
         past_results: scraper.get_horse_past_results() が返す成績リスト
 
     Returns:
@@ -86,8 +89,15 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
     odds_score, odds_label = score_odds(horse.get("odds"))
     past_score, past_label = score_past_results(past_results)
     weight_score, weight_label = score_weight_change(horse.get("weight_change"))
+    course_score, course_label = score_course(
+        horse.get("venue_code", ""),
+        horse.get("surface", ""),
+        horse.get("distance", 0),
+        horse.get("odds"),
+        past_results,
+    )
 
-    total = odds_score + past_score + weight_score
+    total = odds_score + past_score + weight_score + course_score
 
     return {
         "horse_number": horse.get("number", "?"),
@@ -101,6 +111,7 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
             "odds": (odds_score, odds_label),
             "past_results": (past_score, past_label),
             "weight_change": (weight_score, weight_label),
+            "course_fit": (course_score, course_label),
         },
     }
 

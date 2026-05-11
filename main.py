@@ -57,7 +57,7 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
 def display(results: list[dict]) -> None:
     """予測結果をコンソールに表示する。"""
     has_odds = any(r["breakdown"]["odds"][0] > 0 for r in results)
-    max_pts = 65 if has_odds else 40
+    max_pts = 80 if has_odds else 55
 
     print(f"\n{'='*60}")
     print("  【 予想結果 】")
@@ -86,6 +86,7 @@ def display(results: list[dict]) -> None:
         print(f"    単勝オッズ  : {bd['odds'][0]:2d}点  {bd['odds'][1]}")
         print(f"    過去成績    : {bd['past_results'][0]:2d}点  {bd['past_results'][1]}")
         print(f"    馬体重変化  : {bd['weight_change'][0]:2d}点  {bd['weight_change'][1]}")
+        print(f"    コース適性  : {bd['course_fit'][0]:2d}点  {bd['course_fit'][1]}")
         print(f"    合計        : {r['total_score']}点")
 
     print(f"\n{'='*60}")

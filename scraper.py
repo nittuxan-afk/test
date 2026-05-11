@@ -53,7 +53,8 @@ def get_race_entries(race_id: str) -> list[dict]:
     Returns:
         馬の情報リスト。各辞書のキー:
         number, name, horse_id, sex_age, kinryo, jockey, jockey_id,
-        trainer, weight, weight_change, weight_text, odds
+        trainer, weight, weight_change, weight_text, odds,
+        venue_code, surface, distance
     """
     url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
     logger.info("出走表取得: %s", url)
@@ -63,6 +64,10 @@ def get_race_entries(race_id: str) -> list[dict]:
     if table is None:
         raise ValueError(f"出走表テーブルが見つかりません (race_id={race_id})")
 
+    # race_id[4:6] が競馬場コード
+    venue_code = race_id[4:6] if len(race_id) >= 6 else ""
+    race_info = _parse_race_info(soup, venue_code)
+
     horses = []
     for row in table.find_all("tr"):
         row_classes = " ".join(row.get("class", []))
@@ -70,12 +75,43 @@ def get_race_entries(race_id: str) -> list[dict]:
             continue
         horse = _parse_entry_row(row)
         if horse:
+            horse.update(race_info)
             horses.append(horse)
 
     if not horses:
         raise ValueError(f"出走馬が見つかりません (race_id={race_id})")
 
     return horses
+
+
+def _parse_race_info(soup: BeautifulSoup, venue_code: str) -> dict:
+    """出走表ページからレース情報 (馬場・距離) を解析する。"""
+    info: dict = {"venue_code": venue_code, "surface": "", "distance": 0}
+
+    # 候補テキストを広く探す
+    # 対象: "芝1600m", "ダ1400m", "ダート1400m", "障1600m" 等
+    surface_map = {"芝": "芝", "ダ": "ダート", "ダート": "ダート", "障": "障害"}
+    pattern = re.compile(r"(芝|ダート|ダ|障)[\s　]*(\d{3,4})\s*m", re.IGNORECASE)
+
+    # RaceData01 / Race_Data / RaceData 等の div を優先して探す
+    for cls_name in ("RaceData01", "Race_Data01", "RaceData", "Race_Data"):
+        tag = soup.find(class_=cls_name)
+        if tag:
+            m = pattern.search(tag.get_text())
+            if m:
+                info["surface"] = surface_map.get(m.group(1), m.group(1))
+                info["distance"] = int(m.group(2))
+                return info
+
+    # フォールバック: ページ全体のテキストから探す
+    for text in soup.stripped_strings:
+        m = pattern.match(text)
+        if m:
+            info["surface"] = surface_map.get(m.group(1), m.group(1))
+            info["distance"] = int(m.group(2))
+            return info
+
+    return info
 
 
 def _find_shutuba_table(soup: BeautifulSoup):
