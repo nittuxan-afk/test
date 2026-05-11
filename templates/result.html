@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>予想結果 - {{ race_id }}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+      background: #f0f4f0;
+      min-height: 100vh;
+      color: #1a1a1a;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #0d2b0d, #1a5c1a);
+      color: #fff;
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    header h1 { font-size: 20px; font-weight: 800; }
+    header span { font-size: 13px; opacity: 0.75; font-family: monospace; }
+    .back-btn {
+      background: rgba(255,255,255,0.15);
+      color: #fff;
+      text-decoration: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .back-btn:hover { background: rgba(255,255,255,0.25); }
+
+    .container { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+
+    /* ── Top picks ── */
+    .picks-section { margin-bottom: 28px; }
+    .picks-section h2 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+    .picks-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+    }
+    @media (max-width: 600px) { .picks-grid { grid-template-columns: repeat(3, 1fr); } }
+
+    .pick-card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 16px 10px;
+      text-align: center;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      border-top: 4px solid var(--mark-color);
+    }
+    .pick-mark {
+      font-size: 26px;
+      font-weight: 900;
+      color: var(--mark-color);
+      display: block;
+      line-height: 1;
+    }
+    .pick-number {
+      display: inline-block;
+      background: #f0f0f0;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #666;
+      padding: 2px 6px;
+      margin: 6px 0 4px;
+      font-weight: 600;
+    }
+    .pick-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1a1a1a;
+      word-break: break-all;
+    }
+    .pick-jockey { font-size: 11px; color: #888; margin-top: 4px; }
+
+    /* ── Table ── */
+    .table-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      overflow: hidden;
+      margin-bottom: 28px;
+    }
+    .table-card h2 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #333;
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      background: #f8f9f8;
+      font-size: 11px;
+      font-weight: 700;
+      color: #777;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 10px 12px;
+      text-align: left;
+    }
+    td { padding: 11px 12px; border-bottom: 1px solid #f5f5f5; font-size: 14px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #fafcfa; }
+
+    .td-rank { font-weight: 800; font-size: 18px; color: var(--mark-color); width: 40px; }
+    .td-rank.plain { font-size: 14px; color: #aaa; font-weight: 600; }
+    .td-num {
+      width: 40px;
+      text-align: center;
+      background: #f0f0f0;
+      border-radius: 5px;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 3px 0;
+      display: inline-block;
+      min-width: 28px;
+    }
+    .td-name { font-weight: 700; }
+    .td-meta { font-size: 12px; color: #888; }
+    .td-score { min-width: 160px; }
+
+    .score-wrap { display: flex; align-items: center; gap: 8px; }
+    .score-val { font-size: 15px; font-weight: 800; color: #1a5c1a; min-width: 36px; }
+    .bar-bg { flex: 1; height: 8px; background: #eee; border-radius: 99px; overflow: hidden; }
+    .bar-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, #1a5c1a, #4caf50);
+      transition: width 0.6s cubic-bezier(.22,1,.36,1);
+    }
+
+    /* ── Breakdown ── */
+    .breakdown-section { margin-top: 0; }
+    .bd-card {
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+    .bd-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 18px;
+      background: #f8f9f8;
+      border-bottom: 1px solid #f0f0f0;
+      cursor: pointer;
+    }
+    .bd-mark { font-size: 22px; font-weight: 900; color: var(--mark-color); }
+    .bd-title { font-size: 15px; font-weight: 700; flex: 1; }
+    .bd-total {
+      font-size: 20px;
+      font-weight: 900;
+      color: #1a5c1a;
+    }
+    .bd-body { padding: 16px 18px; }
+    .bd-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #f5f5f5;
+      font-size: 14px;
+    }
+    .bd-row:last-child { border-bottom: none; }
+    .bd-label { color: #555; font-weight: 600; width: 100px; flex-shrink: 0; }
+    .bd-detail { color: #888; font-size: 13px; flex: 1; padding: 0 12px; }
+    .bd-pts {
+      font-weight: 800;
+      font-size: 16px;
+      color: #1a5c1a;
+      min-width: 48px;
+      text-align: right;
+    }
+
+    /* ── Footer ── */
+    .note {
+      text-align: center;
+      font-size: 12px;
+      color: #aaa;
+      margin-top: 32px;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🏇 予想結果</h1>
+    <span>race_id: {{ race_id }}</span>
+  </div>
+  <a href="/" class="back-btn">← 戻る</a>
+</header>
+
+<div class="container">
+
+  <!-- 本命印ボックス -->
+  <div class="picks-section">
+    <h2>予想印</h2>
+    <div class="picks-grid">
+      {% for r in results[:5] %}
+      <div class="pick-card" style="--mark-color: {{ mark_colors[loop.index0] }}">
+        <span class="pick-mark">{{ marks[loop.index0] }}</span>
+        <span class="pick-number">{{ r.horse_number }}番</span>
+        <div class="pick-name">{{ r.horse_name }}</div>
+        <div class="pick-jockey">{{ r.jockey }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- 全馬ランキング -->
+  <div class="table-card">
+    <h2>全馬スコアランキング</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>印</th>
+          <th>馬番</th>
+          <th>馬名</th>
+          <th>騎手</th>
+          <th>スコア</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        {% set mi = r.rank - 1 %}
+        <tr>
+          <td class="td-rank {% if r.rank > 5 %}plain{% endif %}"
+              {% if r.rank <= 5 %}style="--mark-color: {{ mark_colors[mi] }}"{% endif %}>
+            {% if r.rank <= 5 %}{{ marks[mi] }}{% else %}{{ r.rank }}{% endif %}
+          </td>
+          <td><span class="td-num">{{ r.horse_number }}</span></td>
+          <td>
+            <div class="td-name">{{ r.horse_name }}</div>
+            <div class="td-meta">{{ r.sex_age }}{% if r.kinryo %} / {{ r.kinryo }}kg{% endif %}{% if r.weight_text %} / {{ r.weight_text }}{% endif %}</div>
+          </td>
+          <td class="td-meta">{{ r.jockey }}</td>
+          <td class="td-score">
+            <div class="score-wrap">
+              <span class="score-val">{{ r.total_score }}</span>
+              <div class="bar-bg">
+                <div class="bar-fill" style="width: {{ (r.total_score / max_score * 100) | round | int }}%"></div>
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 上位5頭の詳細 -->
+  <div class="breakdown-section">
+    <h2 style="font-size:13px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;">スコア詳細 (上位5頭)</h2>
+    {% for r in results[:5] %}
+    {% set mi = r.rank - 1 %}
+    <div class="bd-card">
+      <div class="bd-header" style="--mark-color: {{ mark_colors[mi] }}">
+        <span class="bd-mark">{{ marks[mi] }}</span>
+        <span class="bd-title">{{ r.horse_number }}番 {{ r.horse_name }} <small style="font-weight:400;font-size:12px;color:#888;">{{ r.jockey }}</small></span>
+        <span class="bd-total">{{ r.total_score }}点</span>
+      </div>
+      <div class="bd-body">
+        <div class="bd-row">
+          <span class="bd-label">単勝オッズ</span>
+          <span class="bd-detail">{{ r.breakdown.odds[1] }}</span>
+          <span class="bd-pts">{{ r.breakdown.odds[0] }}pt</span>
+        </div>
+        <div class="bd-row">
+          <span class="bd-label">過去成績</span>
+          <span class="bd-detail">{{ r.breakdown.past_results[1] }}</span>
+          <span class="bd-pts">{{ r.breakdown.past_results[0] }}pt</span>
+        </div>
+        <div class="bd-row">
+          <span class="bd-label">馬体重変化</span>
+          <span class="bd-detail">{{ r.breakdown.weight_change[1] }}</span>
+          <span class="bd-pts">{{ r.breakdown.weight_change[0] }}pt</span>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <p class="note">
+    この予想はエンターテインメント目的です。<br>
+    馬券購入の判断はご自身でお願いします。
+  </p>
+</div>
+
+</body>
+</html>
