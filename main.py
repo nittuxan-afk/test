@@ -107,7 +107,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--race-id",
-        required=True,
         metavar="RACE_ID",
         help="ネットケイバのレースID (例: 202506050811)",
     )
@@ -129,7 +128,23 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    results = run(args.race_id, use_history=not args.no_history)
+    race_id = args.race_id
+    if not race_id:
+        print("\n  競馬場コード: 01=札幌 02=函館 03=福島 04=新潟 05=東京")
+        print("               06=中山 07=中京 08=京都 09=阪神 10=小倉")
+        print("  形式: YYYY + 競馬場(2桁) + 開催回(2桁) + 日数(2桁) + R番号(2桁)")
+        race_id = input("\nレースID (12桁) を入力してください: ").strip()
+        if not race_id:
+            print("レースIDが入力されていません。終了します。")
+            sys.exit(1)
+
+        use_history = args.no_history
+        ans = input("過去成績を取得しますか？ [Y/n]: ").strip().lower()
+        use_history = ans not in ("n", "no")
+    else:
+        use_history = not args.no_history
+
+    results = run(race_id, use_history=use_history)
     display(results)
 
 
