@@ -74,7 +74,10 @@ def get_race_entries(race_id: str) -> list[dict]:
     # HorseList クラスで絞る。なければ horse リンクを含む行を使う
     candidate_rows = [r for r in all_rows if "HorseList" in " ".join(r.get("class", []))]
     if not candidate_rows:
-        logger.debug("HorseList クラスが見つからないため horse リンクで代替")
+        logger.debug(
+            "HorseList クラスが見つかりません。tr クラス一覧: %s",
+            list({" ".join(r.get("class", [])) for r in all_rows if r.get("class")}),
+        )
         candidate_rows = [r for r in all_rows if r.find("a", href=re.compile(r"/horse/"))]
 
     for row in candidate_rows:
@@ -121,10 +124,11 @@ def _parse_race_info(soup: BeautifulSoup, venue_code: str) -> dict:
 
 def _find_shutuba_table(soup: BeautifulSoup):
     """出走表のtableタグを返す。class名が変わっていてもフォールバックで探す。"""
-    # 1. 既知クラス名
-    table = soup.find("table", class_="Shutuba_Table")
-    if table:
-        return table
+    # 1. 既知クラス名（複数クラスでも部分一致）
+    for cls in ("Shutuba_Table", "ShutubaTable", "RaceTable01"):
+        t = soup.find("table", class_=cls)
+        if t:
+            return t
     # 2. HorseList 行を含むテーブル
     for t in soup.find_all("table"):
         if t.find("tr", class_=re.compile(r"HorseList")):
