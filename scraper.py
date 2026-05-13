@@ -69,10 +69,15 @@ def get_race_entries(race_id: str) -> list[dict]:
     race_info = _parse_race_info(soup, venue_code)
 
     horses = []
-    for row in table.find_all("tr"):
-        row_classes = " ".join(row.get("class", []))
-        if "HorseList" not in row_classes:
-            continue
+    all_rows = table.find_all("tr")
+
+    # HorseList クラスで絞る。なければ horse リンクを含む行を使う
+    candidate_rows = [r for r in all_rows if "HorseList" in " ".join(r.get("class", []))]
+    if not candidate_rows:
+        logger.debug("HorseList クラスが見つからないため horse リンクで代替")
+        candidate_rows = [r for r in all_rows if r.find("a", href=re.compile(r"/horse/"))]
+
+    for row in candidate_rows:
         horse = _parse_entry_row(row)
         if horse:
             horse.update(race_info)
@@ -116,28 +121,34 @@ def _parse_race_info(soup: BeautifulSoup, venue_code: str) -> dict:
 
 def _find_shutuba_table(soup: BeautifulSoup):
     """出走表のtableタグを返す。class名が変わっていてもフォールバックで探す。"""
+    # 1. 既知クラス名
     table = soup.find("table", class_="Shutuba_Table")
     if table:
         return table
-    # フォールバック: HorseList行を含むtableを探す
+    # 2. HorseList 行を含むテーブル
     for t in soup.find_all("table"):
         if t.find("tr", class_=re.compile(r"HorseList")):
+            return t
+    # 3. /horse/ リンクを複数含むテーブル（クラス名変更に対応）
+    for t in soup.find_all("table"):
+        if len(t.find_all("a", href=re.compile(r"/horse/"))) >= 3:
             return t
     return None
 
 
 def _parse_entry_row(row) -> dict | None:
-    """TR要素から1頭分の情報を解析する。"""
+    """TR要素から1頭分の情報を解析する。クラス名ベース → 位置・リンクベースの順でフォールバック。"""
     horse: dict = {}
 
     for td in row.find_all("td"):
         cls = " ".join(td.get("class", []))
+        text = td.get_text(strip=True)
 
         if "Umaban" in cls and not horse.get("number"):
-            horse["number"] = td.get_text(strip=True)
+            horse["number"] = text
 
         elif "HorseName" in cls and not horse.get("name"):
-            horse["name"] = td.get_text(strip=True)
+            horse["name"] = text
             a = td.find("a", href=re.compile(r"/horse/"))
             if a:
                 m = re.search(r"/horse/(\w+)", a["href"])
@@ -145,7 +156,7 @@ def _parse_entry_row(row) -> dict | None:
                     horse["horse_id"] = m.group(1)
 
         elif re.search(r"Barei|SexAge", cls) and not horse.get("sex_age"):
-            horse["sex_age"] = td.get_text(strip=True)
+            horse["sex_age"] = text
 
         elif "Jockey" in cls and not horse.get("jockey"):
             a = td.find("a")
@@ -155,14 +166,13 @@ def _parse_entry_row(row) -> dict | None:
                 if m:
                     horse["jockey_id"] = m.group(1)
             else:
-                horse["jockey"] = td.get_text(strip=True)
+                horse["jockey"] = text
 
         elif "Trainer" in cls and not horse.get("trainer"):
             a = td.find("a")
             horse["trainer"] = (a or td).get_text(strip=True)
 
         elif re.search(r"^Weight$", cls) and not horse.get("weight_text"):
-            text = td.get_text(strip=True)
             horse["weight_text"] = text
             m = re.match(r"(\d+)\(([+-]?\d+)\)", text)
             if m:
@@ -170,15 +180,54 @@ def _parse_entry_row(row) -> dict | None:
                 horse["weight_change"] = int(m.group(2))
 
         elif re.search(r"Odds|Tansho", cls) and not horse.get("odds"):
-            text = td.get_text(strip=True)
             try:
                 horse["odds"] = float(text)
             except ValueError:
                 pass
 
-    # 斤量は専用クラスがない場合、Jockeyの直前のセルを推定
+    # ── クラス名ベースで馬名が取れなかった場合、horse リンクから取得 ──
+    if not horse.get("name"):
+        a = row.find("a", href=re.compile(r"/horse/"))
+        if a:
+            horse["name"] = a.get_text(strip=True)
+            m = re.search(r"/horse/(\w+)", a["href"])
+            if m:
+                horse["horse_id"] = m.group(1)
+
+    # ── 馬番: 1〜18の数字セルをフォールバック ──
+    if not horse.get("number") and horse.get("name"):
+        for td in row.find_all("td"):
+            t = td.get_text(strip=True)
+            if re.match(r"^(1[0-8]|[1-9])$", t):
+                horse["number"] = t
+                break
+
+    # ── 斤量: Jockeyの直前セルを推定 ──
     if not horse.get("kinryo"):
         _try_extract_kinryo(row, horse)
+
+    # ── 馬体重: 数字(±数字) パターンをフォールバック ──
+    if not horse.get("weight_text"):
+        for td in row.find_all("td"):
+            t = td.get_text(strip=True)
+            m = re.match(r"(\d{3})\(([+-]?\d+)\)", t)
+            if m:
+                horse["weight_text"] = t
+                horse["weight"] = int(m.group(1))
+                horse["weight_change"] = int(m.group(2))
+                break
+
+    # ── オッズ: 小数点付き数値セルをフォールバック ──
+    if not horse.get("odds"):
+        for td in row.find_all("td"):
+            t = td.get_text(strip=True)
+            m = re.match(r"^\d+\.\d$", t)
+            if m:
+                try:
+                    horse["odds"] = float(t)
+                    break
+                except ValueError:
+                    pass
 
     return horse if horse.get("name") else None
 
