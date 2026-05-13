@@ -108,10 +108,11 @@ def _fill_odds_from_api(race_id: str, horses: list[dict]) -> None:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        # レスポンス形式: {"data": {"odds": {"1": ["3.5", "1"], "2": [...], ...}}}
+        # レスポンス形式: {"status":"result","data":{"odds":{"1":{"01":["3.5",...],...},...}}}
+        # "1" が単勝種別キー、その中が馬番(ゼロ埋め2桁)→[オッズ,...]
         odds_map: dict = (
-            data.get("data", {}).get("odds", {})
-            or data.get("odds", {})
+            data.get("data", {}).get("odds", {}).get("1", {})
+            or data.get("odds", {}).get("1", {})
         )
         for horse in horses:
             num = str(horse.get("number", "")).zfill(2).lstrip("0") or str(horse.get("number", ""))

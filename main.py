@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import sys
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 """
 競馬予想プログラム
 netkeibaのデータを取得してスコアリングで予想順位を表示します。
@@ -59,13 +63,10 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
 
 def display(results: list[dict]) -> None:
     """予測結果をコンソールに表示する。"""
-    has_odds = any(r["breakdown"]["odds"][0] > 0 for r in results)
-    max_pts = 92 if has_odds else 67
-
     print(f"\n{'='*60}")
     print("  【 予想結果 】")
     print(f"{'='*60}")
-    header = f"{'印':^3} {'順':^3} {'馬番':^4} {'馬名':<14} {'騎手':<8} {'合計':>5}"
+    header = f"{'印':^3} {'順':^3} {'馬番':^4} {'馬名':<14} {'騎手':<8} {'オッズ':>6} {'合計':>5}"
     print(header)
     print("-" * 60)
 
@@ -73,9 +74,10 @@ def display(results: list[dict]) -> None:
         mark = PREDICTION_MARKS[r["rank"] - 1] if r["rank"] <= 5 else "  "
         name = r["horse_name"][:12]
         jockey = r["jockey"][:7]
-        print(f"{mark:^3} {r['rank']:>3}  {r['horse_number']:^4}  {name:<14} {jockey:<8} {r['total_score']:>3}点")
+        odds_str = f"{r['odds']:.1f}倍" if r.get("odds") else "  -  "
+        print(f"{mark:^3} {r['rank']:>3}  {r['horse_number']:^4}  {name:<14} {jockey:<8} {odds_str:>6} {r['total_score']:>3}点")
 
-    print(f"\n  ※スコアの最高点: 約{max_pts}点 (オッズあり時)\n")
+    print(f"\n  ※スコアの最高点: 約67点\n")
 
     print("【 詳細スコア (上位5頭) 】")
     print("-" * 60)
@@ -84,9 +86,9 @@ def display(results: list[dict]) -> None:
         bd = r["breakdown"]
         weight = r["weight_text"] or "不明"
         kinryo = f'{r["kinryo"]}kg' if r.get("kinryo") else "不明"
+        odds_str = f"{r['odds']:.1f}倍" if r.get("odds") else "データなし"
         print(f"\n{mark} {r['horse_number']}番 {r['horse_name']}  "
-              f"({r.get('sex_age', '')}) 斤量:{kinryo}  馬体重:{weight}")
-        print(f"    単勝オッズ  : {bd['odds'][0]:2d}点  {bd['odds'][1]}")
+              f"({r.get('sex_age', '')}) 斤量:{kinryo}  馬体重:{weight}  単勝:{odds_str}")
         print(f"    過去成績    : {bd['past_results'][0]:2d}点  {bd['past_results'][1]}")
         print(f"    馬体重変化  : {bd['weight_change'][0]:2d}点  {bd['weight_change'][1]}")
         print(f"    コース適性  : {bd['course_fit'][0]:2d}点  {bd['course_fit'][1]}")

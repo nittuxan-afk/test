@@ -1,34 +1,15 @@
 """
 各種要素にスコアを付けて馬の予想順位を算出するモジュール。
 
-スコアの内訳 (最大80点):
-  単勝オッズ   : 0-25点
+スコアの内訳 (最大67点):
   過去成績(3走): 0-30点
   馬体重変化   : 0-10点 (データなし時は5点)
   コース適性   : 0-15点 (コースデータなし時は5点)
+  血統適性     : -6~12点
 """
 from course_data import score_course
 from pedigree_data import score_pedigree
 
-
-def score_odds(odds: float | None) -> tuple[int, str]:
-    """単勝オッズのスコア (0-25点)。人気馬ほど高スコア。"""
-    if odds is None:
-        return 0, "データなし"
-    if odds < 2.0:
-        return 25, f"{odds:.1f}倍 (断然人気)"
-    elif odds < 3.0:
-        return 20, f"{odds:.1f}倍 (1番人気圏)"
-    elif odds < 5.0:
-        return 15, f"{odds:.1f}倍 (上位人気)"
-    elif odds < 10.0:
-        return 10, f"{odds:.1f}倍 (中位人気)"
-    elif odds < 20.0:
-        return 6, f"{odds:.1f}倍 (下位人気)"
-    elif odds < 50.0:
-        return 3, f"{odds:.1f}倍 (低人気)"
-    else:
-        return 1, f"{odds:.1f}倍 (超低人気)"
 
 
 def score_past_results(results: list[dict]) -> tuple[int, str]:
@@ -87,7 +68,6 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
     Returns:
         スコア情報辞書 (horse_number, horse_name, jockey, total_score, breakdown)
     """
-    odds_score, odds_label = score_odds(horse.get("odds"))
     past_score, past_label = score_past_results(past_results)
     weight_score, weight_label = score_weight_change(horse.get("weight_change"))
     course_score, course_label = score_course(
@@ -106,7 +86,7 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         horse.get("sex_age", ""),
     )
 
-    total = odds_score + past_score + weight_score + course_score + pedigree_score
+    total = past_score + weight_score + course_score + pedigree_score
 
     return {
         "horse_number": horse.get("number", "?"),
@@ -115,9 +95,9 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         "sex_age": horse.get("sex_age", ""),
         "kinryo": horse.get("kinryo"),
         "weight_text": horse.get("weight_text", ""),
+        "odds": horse.get("odds"),
         "total_score": total,
         "breakdown": {
-            "odds": (odds_score, odds_label),
             "past_results": (past_score, past_label),
             "weight_change": (weight_score, weight_label),
             "course_fit": (course_score, course_label),

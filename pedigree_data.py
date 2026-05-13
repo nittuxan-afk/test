@@ -357,7 +357,13 @@ def score_pedigree(
         tag = _rating_label(best_dam_score)
         parts.append(f"母父{best_dam_name}({tag})")
     if not parts:
-        return 0, "血統適性データなし"
+        name_parts = []
+        if sire:
+            name_parts.append(f"父{sire}")
+        if dam_sire:
+            name_parts.append(f"母父{dam_sire}")
+        label = f"辞典なし ({' / '.join(name_parts)})" if name_parts else "血統データなし"
+        return 0, label
 
     approx_str = "(近似)" if approx else ""
     desc = " / ".join(parts) + approx_str
