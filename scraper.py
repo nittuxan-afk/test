@@ -221,15 +221,22 @@ def _parse_entry_row(row) -> dict | None:
                 horse["weight_change"] = int(m.group(2))
                 break
 
-    # ── オッズ: 小数点付き数値セルをフォールバック ──
+    # ── オッズ: 馬体重セルの直後から探す（斤量との混同を防ぐ）──
     if not horse.get("odds"):
-        for td in row.find_all("td"):
-            t = td.get_text(strip=True)
-            m = re.match(r"^\d+\.\d$", t)
-            if m:
+        tds = row.find_all("td")
+        weight_idx = next(
+            (i for i, td in enumerate(tds)
+             if re.match(r"\d{3}\([+-]?\d+\)", td.get_text(strip=True))),
+            None,
+        )
+        if weight_idx is not None:
+            for td in tds[weight_idx + 1: weight_idx + 4]:
+                t = td.get_text(strip=True)
                 try:
-                    horse["odds"] = float(t)
-                    break
+                    val = float(t)
+                    if val >= 1.0:
+                        horse["odds"] = val
+                        break
                 except ValueError:
                     pass
 
@@ -303,8 +310,11 @@ def _parse_pedigree(soup: BeautifulSoup) -> tuple[str, str]:
     sire = ""
     dam_sire = ""
 
-    # Strategy 1: blood_table クラスの td から取得
-    blood_table = soup.find("table", class_="blood_table")
+    # Strategy 1: blood_table / blood 系クラスのテーブル
+    blood_table = (
+        soup.find("table", class_="blood_table")
+        or soup.find("table", class_=re.compile(r"blood", re.I))
+    )
     if blood_table:
         tds = blood_table.find_all("td")
         for td in tds:
@@ -313,49 +323,84 @@ def _parse_pedigree(soup: BeautifulSoup) -> tuple[str, str]:
             text = (a.get_text(strip=True) if a else td.get_text(strip=True))
             if not text or text in ("－", "-", ""):
                 continue
-            # netkeibaの3世代血統表: b_01=父, b_03=母, b_05=母父 (構成により異なる)
             if cls_set & {"b_01", "b_02"} and not sire:
                 sire = text
             elif cls_set & {"b_04", "b_05", "b_06"} and not dam_sire:
                 dam_sire = text
 
-        # position-based fallback: odd cells = direct ancestors
-        if not sire and tds:
-            a = tds[0].find("a")
-            sire = (a.get_text(strip=True) if a else tds[0].get_text(strip=True))
-        if not dam_sire and len(tds) >= 4:
-            a = tds[3].find("a")
-            dam_sire = (a.get_text(strip=True) if a else tds[3].get_text(strip=True))
+        # 位置ベースフォールバック: 有効セルの1番目=父, 4〜5番目=母父
+        if not sire or not dam_sire:
+            valid = [td for td in tds
+                     if td.get_text(strip=True) not in ("", "－", "-")]
+            if not sire and valid:
+                a = valid[0].find("a")
+                sire = (a.get_text(strip=True) if a else valid[0].get_text(strip=True))
+            if not dam_sire:
+                for td in valid[3:6]:
+                    a = td.find("a")
+                    candidate = (a.get_text(strip=True) if a else td.get_text(strip=True))
+                    if candidate and candidate != sire:
+                        dam_sire = candidate
+                        break
 
-    # Strategy 2: th/td ラベル検索 (「父」「母父」)
+    # Strategy 2: 「父」「母父」ラベルの隣セルを探す (th または td)
     if not sire or not dam_sire:
-        for th in soup.find_all("th"):
-            label = th.get_text(strip=True)
-            sibling = th.find_next_sibling("td")
-            if not sibling:
+        for cell in soup.find_all(["th", "td"]):
+            label = cell.get_text(strip=True)
+            if label not in ("父", "母父"):
                 continue
-            a = sibling.find("a")
-            val = (a.get_text(strip=True) if a else sibling.get_text(strip=True))
-            if label == "父" and not sire:
-                sire = val
-            elif label == "母父" and not dam_sire:
-                dam_sire = val
+            # 同じ行 (tr) の次の td を取得
+            parent_tr = cell.find_parent("tr")
+            if not parent_tr:
+                continue
+            cells_in_row = parent_tr.find_all(["th", "td"])
+            for i, c in enumerate(cells_in_row):
+                if c == cell and i + 1 < len(cells_in_row):
+                    a = cells_in_row[i + 1].find("a")
+                    val = (a.get_text(strip=True) if a
+                           else cells_in_row[i + 1].get_text(strip=True))
+                    if label == "父" and not sire:
+                        sire = val
+                    elif label == "母父" and not dam_sire:
+                        dam_sire = val
+                    break
 
+    # Strategy 3: /horse/ リンクを4件以上含むテーブルから位置で推定
+    if not sire:
+        for t in soup.find_all("table"):
+            links = [a for a in t.find_all("a", href=re.compile(r"/horse/"))]
+            if len(links) >= 4:
+                sire = links[0].get_text(strip=True)
+                if len(links) > 3:
+                    dam_sire = links[3].get_text(strip=True)
+                break
+
+    logger.debug("血統取得結果: 父=%s 母父=%s", sire, dam_sire)
     return sire, dam_sire
 
 
 def _find_results_table(soup: BeautifulSoup):
     """過去成績テーブルを返す。"""
-    for cls in ("db_h_race_results nk_tb_common", "db_h_race_results"):
+    # 1. 既知クラス名
+    for cls in ("db_h_race_results", "nk_tb_common", "race_table_01"):
         t = soup.find("table", class_=cls)
         if t:
             return t
-    # フォールバック: 着順列を含むテーブルを探す
+    # 2. 「着順」ヘッダーを th または td で含むテーブル
     for t in soup.find_all("table"):
-        headers = [th.get_text(strip=True) for th in t.find_all("th")]
-        if "着順" in headers:
+        cells = [c.get_text(strip=True) for c in t.find_all(["th", "td"])[:30]]
+        if "着順" in cells:
             return t
-    return None
+    # 3. 着順数値(1〜18)を最も多く含むテーブル（成績表を推定）
+    best_t, best_count = None, 2
+    for t in soup.find_all("table"):
+        count = sum(
+            1 for td in t.find_all("td")
+            if re.match(r"^(1[0-8]|[1-9])$", td.get_text(strip=True))
+        )
+        if count > best_count:
+            best_count, best_t = count, t
+    return best_t
 
 
 def _parse_result_row(tds) -> dict | None:
