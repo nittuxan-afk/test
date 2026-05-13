@@ -148,6 +148,21 @@
       transition: width 0.6s cubic-bezier(.22,1,.36,1);
     }
 
+    .grade-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .gb {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 5px;
+      border-radius: 4px;
+      color: #fff;
+      white-space: nowrap;
+    }
+    .grade-S { background: #e67e22; }
+    .grade-A { background: #2980b9; }
+    .grade-B { background: #27ae60; }
+    .grade-C { background: #95a5a6; }
+    .grade-D { background: #e74c3c; }
+
     /* ── Breakdown ── */
     .breakdown-section { margin-top: 0; }
     .bd-card {
@@ -260,9 +275,16 @@
           <td class="td-score">
             <div class="score-wrap">
               <span class="score-val">{{ r.total_score }}</span>
+              <span class="gb grade-{{ r.grades.total }}" style="font-size:13px;padding:3px 9px;">{{ r.grades.total }}</span>
               <div class="bar-bg">
                 <div class="bar-fill" style="width: {{ (r.total_score / max_score * 100) | round | int }}%"></div>
               </div>
+            </div>
+            <div class="grade-badges">
+              <span class="gb grade-{{ r.grades.past_results }}">過去 {{ r.grades.past_results }}</span>
+              <span class="gb grade-{{ r.grades.weight_change }}">体重 {{ r.grades.weight_change }}</span>
+              <span class="gb grade-{{ r.grades.course_fit }}">コース {{ r.grades.course_fit }}</span>
+              <span class="gb grade-{{ r.grades.pedigree }}">血統 {{ r.grades.pedigree }}</span>
             </div>
           </td>
         </tr>
@@ -283,11 +305,6 @@
         <span class="bd-total">{{ r.total_score }}点</span>
       </div>
       <div class="bd-body">
-        <div class="bd-row">
-          <span class="bd-label">単勝オッズ</span>
-          <span class="bd-detail">{{ r.breakdown.odds[1] }}</span>
-          <span class="bd-pts">{{ r.breakdown.odds[0] }}pt</span>
-        </div>
         <div class="bd-row">
           <span class="bd-label">過去成績</span>
           <span class="bd-detail">{{ r.breakdown.past_results[1] }}</span>

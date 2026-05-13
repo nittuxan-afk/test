@@ -65,24 +65,30 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
 
 def display(results: list[dict]) -> None:
     """予測結果をコンソールに表示する。"""
-    print(f"\n{'='*60}")
+    print(f"\n{'='*72}")
     print("  【 予想結果 】")
-    print(f"{'='*60}")
-    header = f"{'印':^3} {'順':^3} {'馬番':^4} {'馬名':<14} {'騎手':<8} {'オッズ':>6} {'合計':>5}"
+    print(f"{'='*72}")
+    header = f"{'印':^3} {'順':^3} {'馬番':^4} {'馬名':<14} {'騎手':<8} {'オッズ':>6} {'合計':>8}  過去 体重 コース 血統"
     print(header)
-    print("-" * 60)
+    print("-" * 72)
 
     for r in results:
         mark = PREDICTION_MARKS[r["rank"] - 1] if r["rank"] <= 5 else "  "
         name = r["horse_name"][:12]
         jockey = r["jockey"][:7]
         odds_str = f"{r['odds']:.1f}倍" if r.get("odds") else "  -  "
-        print(f"{mark:^3} {r['rank']:>3}  {r['horse_number']:^4}  {name:<14} {jockey:<8} {odds_str:>6} {r['total_score']:>3}点")
+        g = r.get("grades", {})
+        gt = g.get("total", "-")
+        gp = g.get("past_results", "-")
+        gw = g.get("weight_change", "-")
+        gc = g.get("course_fit", "-")
+        gb = g.get("pedigree", "-")
+        print(f"{mark:^3} {r['rank']:>3}  {r['horse_number']:^4}  {name:<14} {jockey:<8} {odds_str:>6} {r['total_score']:>3}点[{gt}]  {gp:^2}   {gw:^2}    {gc:^2}   {gb:^2}")
 
-    print(f"\n  ※スコアの最高点: 約67点\n")
+    print(f"\n  ※スコアの最高点: 約67点  評価基準: S=超優秀 A=優秀 B=普通 C=やや低 D=低\n")
 
     print("【 詳細スコア (上位5頭) 】")
-    print("-" * 60)
+    print("-" * 72)
     for r in results[:5]:
         mark = PREDICTION_MARKS[r["rank"] - 1]
         bd = r["breakdown"]
@@ -97,10 +103,10 @@ def display(results: list[dict]) -> None:
         print(f"    血統適性    : {bd['pedigree'][0]:2d}点  {bd['pedigree'][1]}")
         print(f"    合計        : {r['total_score']}点")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'='*72}")
     print("注意: この予想はエンターテインメント目的です。")
     print("      馬券購入の判断はご自身でお願いします。")
-    print(f"{'='*60}\n")
+    print(f"{'='*72}\n")
 
 
 def main() -> None:

@@ -79,6 +79,26 @@ def score_weight_change(change: int | None) -> tuple[int, str]:
         return 1, f"{label} (極端な変動)"
 
 
+_GRADE_THRESHOLDS: dict[str, list[tuple[int, str]]] = {
+    "past_results": [(25, "S"), (20, "A"), (14, "B"), (8, "C"), (0, "D")],
+    "weight_change": [(10, "S"), (8, "A"), (6, "B"), (3, "C"), (0, "D")],
+    "course_fit":    [(13, "S"), (10, "A"), (7, "B"), (5, "C"), (0, "D")],
+    "pedigree":      [(10, "S"), (7, "A"), (4, "B"), (0, "C"), (-99, "D")],
+}
+
+
+def factor_grades(breakdown: dict) -> dict[str, str]:
+    """各ファクターのスコアをS~Dのレター評価に変換する。"""
+    grades = {}
+    for key, thresholds in _GRADE_THRESHOLDS.items():
+        score = breakdown[key][0]
+        for min_score, letter in thresholds:
+            if score >= min_score:
+                grades[key] = letter
+                break
+    return grades
+
+
 def calculate_score(horse: dict, past_results: list[dict]) -> dict:
     """
     1頭の総合スコアを計算する。
@@ -114,6 +134,19 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
 
     total = past_score + weight_score + course_score + pedigree_score
 
+    breakdown = {
+        "past_results": (past_score, past_label),
+        "weight_change": (weight_score, weight_label),
+        "course_fit": (course_score, course_label),
+        "pedigree": (pedigree_score, pedigree_label),
+    }
+
+    grades = factor_grades(breakdown)
+    grades["total"] = next(
+        letter for min_s, letter in [(55, "S"), (45, "A"), (35, "B"), (25, "C"), (0, "D")]
+        if total >= min_s
+    )
+
     return {
         "horse_number": horse.get("number", "?"),
         "horse_name": horse.get("name", "不明"),
@@ -123,12 +156,8 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         "weight_text": horse.get("weight_text", ""),
         "odds": horse.get("odds"),
         "total_score": total,
-        "breakdown": {
-            "past_results": (past_score, past_label),
-            "weight_change": (weight_score, weight_label),
-            "course_fit": (course_score, course_label),
-            "pedigree": (pedigree_score, pedigree_label),
-        },
+        "breakdown": breakdown,
+        "grades": grades,
     }
 
 
