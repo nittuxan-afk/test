@@ -2,6 +2,7 @@
 netkeiba.com から出走表・過去成績をスクレイピングするモジュール。
 利用にあたっては netkeiba の利用規約を確認してください。
 """
+import json
 import logging
 import re
 import time
@@ -89,7 +90,42 @@ def get_race_entries(race_id: str) -> list[dict]:
     if not horses:
         raise ValueError(f"出走馬が見つかりません (race_id={race_id})")
 
+    # HTML からオッズが取れなかった場合は API で補完
+    if not any(h.get("odds") for h in horses):
+        logger.debug("HTMLからオッズ未取得のため API で補完します")
+        _fill_odds_from_api(race_id, horses)
+
     return horses
+
+
+def _fill_odds_from_api(race_id: str, horses: list[dict]) -> None:
+    """netkeibaの単勝オッズAPIから各馬のオッズを取得して horses に書き込む。"""
+    url = (
+        "https://race.netkeiba.com/api/api_get_jra_odds.html"
+        f"?race_id={race_id}&type=1&action=update"
+    )
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        # レスポンス形式: {"data": {"odds": {"1": ["3.5", "1"], "2": [...], ...}}}
+        odds_map: dict = (
+            data.get("data", {}).get("odds", {})
+            or data.get("odds", {})
+        )
+        for horse in horses:
+            num = str(horse.get("number", "")).zfill(2).lstrip("0") or str(horse.get("number", ""))
+            for key in (num, num.zfill(2)):
+                entry = odds_map.get(key)
+                if entry:
+                    try:
+                        horse["odds"] = float(entry[0])
+                    except (ValueError, IndexError, TypeError):
+                        pass
+                    break
+        logger.debug("APIオッズ取得完了")
+    except Exception as e:
+        logger.warning("オッズAPI取得失敗: %s", e)
 
 
 def _parse_race_info(soup: BeautifulSoup, venue_code: str) -> dict:
