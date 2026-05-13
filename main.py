@@ -54,6 +54,8 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
                 past = data["results"]
                 horse["sire"] = data.get("sire", "")
                 horse["dam_sire"] = data.get("dam_sire", "")
+                horse["sire_stats"] = data.get("sire_stats", {})
+                horse["dam_sire_stats"] = data.get("dam_sire_stats", {})
             except Exception as e:
                 logging.warning("過去成績取得失敗: %s", e)
         scored.append(calculate_score(horse, past))

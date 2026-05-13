@@ -2,7 +2,7 @@
 各種要素にスコアを付けて馬の予想順位を算出するモジュール。
 
 スコアの内訳 (最大67点):
-  過去成績(3走): 0-30点
+  過去成績(3走): 0-30点  ※ G1/G2/G3は着順ポイントにグレード係数を乗算
   馬体重変化   : 0-10点 (データなし時は5点)
   コース適性   : 0-15点 (コースデータなし時は5点)
   血統適性     : -6~12点
@@ -10,30 +10,53 @@
 from course_data import score_course
 from pedigree_data import score_pedigree
 
+# グレード別の着順ポイント乗算係数
+GRADE_MULTIPLIER: dict[str, float] = {
+    "G1": 1.5,
+    "G2": 1.3,
+    "G3": 1.2,
+    "重賞": 1.1,
+}
 
 
 def score_past_results(results: list[dict]) -> tuple[int, str]:
     """
-    直近3走の着順スコア (0-30点)。
+    直近3走の着順スコア (0-30点)。グレードレースは係数で加重する。
 
     着順別ポイント: 1着=10, 2着=8, 3着=6, 4着=5, 5着=4,
                    6着=3, 7着=2, 8着=1, 9着以下=0
+    グレード係数: G1=×1.5, G2=×1.3, G3=×1.2, 重賞=×1.1
     """
     if not results:
         return 10, "データなし (中間値)"
 
     point_map = {1: 10, 2: 8, 3: 6, 4: 5, 5: 4, 6: 3, 7: 2, 8: 1}
     recent = results[:3]
-    total = sum(point_map.get(r["finish"], 0) for r in recent)
+
+    total = 0.0
+    for r in recent:
+        base = point_map.get(r.get("finish", 99), 0)
+        mult = GRADE_MULTIPLIER.get(r.get("grade", ""), 1.0)
+        total += base * mult
+
+    total_int = round(total)
 
     # データが3走未満の場合は平均を3走分に換算
     if len(recent) < 3:
         avg = total / len(recent)
-        total = round(avg * 3)
+        total_int = round(avg * 3)
 
-    labels = [f'{r["finish"]}着' for r in recent]
+    labels = []
+    for r in recent:
+        finish = r.get("finish", 99)
+        grade = r.get("grade", "")
+        label = f"{finish}着"
+        if grade:
+            label += f"({grade})"
+        labels.append(label)
+
     detail = " → ".join(labels)
-    return min(total, 30), detail
+    return min(total_int, 30), detail
 
 
 def score_weight_change(change: int | None) -> tuple[int, str]:
@@ -63,7 +86,9 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
     Args:
         horse: scraper.get_race_entries() が返す馬辞書
                (venue_code, surface, distance フィールドを含む)
+               sire_stats / dam_sire_stats は get_horse_past_results() が付与
         past_results: scraper.get_horse_past_results() が返す成績リスト
+                      各要素に grade / surface / distance / pace フィールドを含む
 
     Returns:
         スコア情報辞書 (horse_number, horse_name, jockey, total_score, breakdown)
@@ -74,7 +99,6 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         horse.get("venue_code", ""),
         horse.get("surface", ""),
         horse.get("distance", 0),
-        horse.get("odds"),
         past_results,
     )
     pedigree_score, pedigree_label = score_pedigree(
@@ -84,6 +108,8 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         horse.get("sire", ""),
         horse.get("dam_sire", ""),
         horse.get("sex_age", ""),
+        horse.get("sire_stats", {}),
+        horse.get("dam_sire_stats", {}),
     )
 
     total = past_score + weight_score + course_score + pedigree_score

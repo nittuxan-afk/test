@@ -56,6 +56,7 @@ COURSE_STATS: dict[tuple[str, str, int], tuple[float, float, float]] = {
     ("08", "T", 2000): (69.0, 76.1, 39.9),
     ("08", "T", 2200): (64.4, 72.6, 35.0),
     ("08", "T", 2400): (78.9, 77.4, 27.9),
+    ("08", "T", 3200): (72.5, 68.3, 32.1),
     ("08", "D", 1800): (65.4, 78.6, 43.9),
     ("08", "D", 1900): (72.1, 78.3, 31.0),
     # ─────────── 中京 (07) ───────────
@@ -136,7 +137,6 @@ def score_course(
     venue_code: str,
     surface: str,
     distance: int,
-    odds: float | None,
     past_results: list[dict],
 ) -> tuple[int, str]:
     """
@@ -144,8 +144,8 @@ def score_course(
 
     採点ロジック:
       1. コース信頼度 (0-5pt): 1番人気馬券率が高いほど点数が高い
-      2. オッズ×信頼度 (0-7pt): 人気馬ほど得点、かつ信頼度の高いコースで加算
-      3. 上がり適性 (0-3pt): 最速上がり率が高いコースで近走好走なら加算
+      2. 同競馬場・同馬場での過去実績 (0-5pt): 同コース好走歴を評価
+      3. 脚質×ペース適性 (0-5pt): 逃げ有利コースで先行実績があれば加点
 
     Returns:
         (score, description)
@@ -160,9 +160,10 @@ def score_course(
 
     fav_rate = course["fav_rate"]
     fastest_rate = course["fastest_rate"]
+    pace_rate = course["pace_rate"]
     approx = course["approx"]
 
-    # ① コース信頼度ベース (0-5pt)
+    # ① コース信頼度 (0-5pt): 1番人気の馬券率で計測
     if fav_rate >= 72:
         rel_pts = 5
     elif fav_rate >= 68:
@@ -174,36 +175,63 @@ def score_course(
     else:
         rel_pts = 1
 
-    # ② オッズ × 信頼度 (0-7pt)
-    # 信頼度係数: 1番人気率50%〜75%を0.0〜1.0にマップ
-    rel_factor = min(1.0, max(0.0, (fav_rate - 50.0) / 25.0))
-    if odds is not None:
-        if odds < 3.0:
-            o_raw = 7.0
-        elif odds < 6.0:
-            o_raw = 5.0
-        elif odds < 12.0:
-            o_raw = 2.5
-        else:
-            o_raw = 0.0
-        o_pts = round(o_raw * rel_factor)
-    else:
-        o_pts = 2  # オッズ不明時は中間値
-
-    # ③ 上がり適性 (0-3pt)
-    # 最速上がり率が高いコースで近走好走馬を評価
+    # ② 同競馬場・同馬場での過去実績 (0-5pt)
+    same_pts = 0
     if past_results:
-        top3_count = sum(1 for r in past_results[:3] if r.get("finish", 99) <= 3)
-        if fastest_rate >= 75:
-            r_pts = min(3, top3_count + 1)
-        else:
-            r_pts = min(2, top3_count)
-    else:
-        r_pts = 1  # 過去成績なしは中間値
+        venue_name_str = VENUE_NAMES.get(venue_code, "")
+        best_finish = 99
+        for r in past_results[:6]:
+            r_venue = r.get("venue", "")
+            r_surface = r.get("surface", "")
+            r_finish = r.get("finish", 99)
+            r_dist = r.get("distance", 0)
 
-    total = min(15, rel_pts + o_pts + r_pts)
+            venue_match = bool(
+                venue_name_str and (venue_name_str in r_venue or r_venue == venue_name_str)
+            )
+            surface_match = r_surface == surface if r_surface else False
 
-    # 説明文生成
+            if venue_match and surface_match:
+                # 同距離（200m以内）ならそのまま、遠距離は+2ペナルティ
+                if r_dist and abs(r_dist - distance) <= 200:
+                    best_finish = min(best_finish, r_finish)
+                else:
+                    best_finish = min(best_finish, r_finish + 2)
+
+        if best_finish == 1:
+            same_pts = 5
+        elif best_finish <= 3:
+            same_pts = 4
+        elif best_finish <= 6:
+            same_pts = 2
+        elif best_finish < 99:
+            same_pts = 1
+
+    # ③ 脚質×ペース適性 (0-5pt)
+    pace_pts = 2  # データなし時のデフォルト
+    if past_results:
+        paces = [r.get("pace", "") for r in past_results[:3] if r.get("pace")]
+        if paces:
+            front = sum(1 for p in paces if p in ("逃", "先"))
+            back = sum(1 for p in paces if p in ("差", "追"))
+
+            if pace_rate >= 45:  # 逃げ・先行有利コース
+                if front >= 2:
+                    pace_pts = 5
+                elif front == 1:
+                    pace_pts = 3
+                else:
+                    pace_pts = 1
+            else:               # 差し・追込有利コース
+                if back >= 2:
+                    pace_pts = 5
+                elif back == 1:
+                    pace_pts = 3
+                else:
+                    pace_pts = 1
+
+    total = min(15, rel_pts + same_pts + pace_pts)
+
     venue_name = VENUE_NAMES.get(venue_code, venue_code)
     approx_str = "(近似)" if approx else ""
     desc = (

@@ -2,6 +2,9 @@
 血統適性スコア計算モジュール。
 「ちょっちゅ使える血統辞典2026【中央競馬版】」をもとに作成。
 
+静的テーブルにない種牡馬は、netkeibaから取得した種牡馬Web統計
+(preferred_surface / preferred_distance) でフォールバック評価する。
+
 評価レーティング:
   SUPER_BUY  (+12): 超絶買い / 超爆買い
   STRONG_BUY  (+8): 激買い
@@ -142,6 +145,13 @@ PEDIGREE_RATINGS: dict[tuple[str, str, int], list[tuple[str, int, str | None]]] 
     ("08", "T", 2400): [
         ("キズナ",           SUPER_BUY,  None),
         ("ドゥラメンテ",      STRONG_BUY, None),
+    ],
+    ("08", "T", 3200): [
+        ("キタサンブラック",  SUPER_BUY,  None),
+        ("ルーラーシップ",    STRONG_BUY, None),
+        ("ディープインパクト", STRONG_BUY, None),
+        ("ドゥラメンテ",      BUY,        None),
+        ("エピファネイア",    BUY,        None),
     ],
     ("08", "D", 1200): [
         ("ドレフォン",        STRONG_BUY, None),
@@ -287,12 +297,23 @@ def score_pedigree(
     sire: str,
     dam_sire: str,
     sex_age: str,
+    sire_stats: dict | None = None,
+    dam_sire_stats: dict | None = None,
 ) -> tuple[int, str]:
     """
     血統適性スコアを計算する。最大12点 (最小-6点)。
 
+    優先順位:
+      1. 静的テーブル (PEDIGREE_RATINGS) に一致 → テーブルのレーティングを使用
+      2. 静的テーブルに一致なし + Web統計あり → 種牡馬の芝/ダート・距離優位で評価
+      3. どちらもなし → 0点
+
     父馬: 完全一致でレーティングを取得
     母父: 同テーブルで一致した場合は 60% のポイントを付与
+
+    Args:
+        sire_stats: scraper._get_sire_stats() が返す父馬の統計辞書
+        dam_sire_stats: 母父馬の統計辞書
 
     Returns:
         (score, description)
@@ -305,6 +326,7 @@ def score_pedigree(
 
     # 最近傍距離で補完
     entries = PEDIGREE_RATINGS.get(key)
+    approx = False
     if entries is None:
         candidates = [
             (abs(d - distance), d)
@@ -316,9 +338,7 @@ def score_pedigree(
             entries = PEDIGREE_RATINGS.get((venue_code, s, nearest), [])
             approx = True
         else:
-            return 0, "血統データなし"
-    else:
-        approx = False
+            entries = []
 
     sex = _get_sex(sex_age)
     best_sire_score = 0
@@ -344,11 +364,7 @@ def score_pedigree(
                 best_dam_score = reduced
                 best_dam_name = dam_sire
 
-    # スコア確定: 父・母父の合算(ただし上限・下限クリップ)
-    total = best_sire_score + best_dam_score
-    total = max(-6, min(12, total))
-
-    # 説明文
+    # ─── 静的テーブルで一致した場合 ───
     parts = []
     if best_sire_name:
         tag = _rating_label(best_sire_score)
@@ -356,18 +372,94 @@ def score_pedigree(
     if best_dam_name:
         tag = _rating_label(best_dam_score)
         parts.append(f"母父{best_dam_name}({tag})")
-    if not parts:
-        name_parts = []
-        if sire:
-            name_parts.append(f"父{sire}")
-        if dam_sire:
-            name_parts.append(f"母父{dam_sire}")
-        label = f"辞典なし ({' / '.join(name_parts)})" if name_parts else "血統データなし"
-        return 0, label
 
-    approx_str = "(近似)" if approx else ""
-    desc = " / ".join(parts) + approx_str
-    return total, desc
+    if parts:
+        total = best_sire_score + best_dam_score
+        total = max(-6, min(12, total))
+        approx_str = "(近似)" if approx else ""
+        desc = " / ".join(parts) + approx_str
+        return total, desc
+
+    # ─── 静的テーブルに一致なし → Web統計でフォールバック ───
+    web_score, web_desc = _score_from_web_stats(
+        sire, dam_sire,
+        sire_stats or {},
+        dam_sire_stats or {},
+        surface, distance,
+    )
+    if web_desc:
+        approx_str = "(近似)" if approx else ""
+        return web_score, f"Web統計: {web_desc}{approx_str}"
+
+    # ─── データなし ───
+    name_parts = []
+    if sire:
+        name_parts.append(f"父{sire}")
+    if dam_sire:
+        name_parts.append(f"母父{dam_sire}")
+    label = f"辞典なし ({' / '.join(name_parts)})" if name_parts else "血統データなし"
+    return 0, label
+
+
+def _score_from_web_stats(
+    sire: str,
+    dam_sire: str,
+    sire_stats: dict,
+    dam_sire_stats: dict,
+    surface: str,
+    distance: int,
+) -> tuple[int, str]:
+    """
+    種牡馬Web統計 (preferred_surface / preferred_distance) からスコアを計算する。
+
+    スコア範囲: -4〜+8 (静的テーブルの STRONG_BUY と同等の上限)
+    """
+    dist_cat = "短距離" if distance <= 1400 else "中距離" if distance <= 2000 else "長距離"
+    dist_list = ["短距離", "中距離", "長距離"]
+    parts = []
+    total = 0
+
+    def _calc(stats: dict, name: str, multiplier: float) -> None:
+        nonlocal total
+        sub = 0
+        pref_surf = stats.get("preferred_surface", "")
+        pref_dist = stats.get("preferred_distance", "")
+        tag_parts = []
+
+        if pref_surf:
+            if pref_surf == surface:
+                sub += 4
+                tag_parts.append(f"{pref_surf}○")
+            else:
+                sub -= 2
+                tag_parts.append(f"{pref_surf}専門")
+
+        if pref_dist:
+            if pref_dist == dist_cat:
+                sub += 4
+                tag_parts.append(f"{pref_dist}○")
+            elif pref_dist in dist_list and dist_cat in dist_list:
+                diff = abs(dist_list.index(pref_dist) - dist_list.index(dist_cat))
+                if diff == 1:
+                    sub += 1
+                    tag_parts.append(f"{pref_dist}寄り")
+                else:
+                    sub -= 2
+                    tag_parts.append(f"{pref_dist}専門")
+
+        contribution = round(sub * multiplier)
+        if contribution != 0 and tag_parts:
+            total += contribution
+            sign = f"+{contribution}" if contribution > 0 else str(contribution)
+            parts.append(f"{name}({'・'.join(tag_parts)}{sign})")
+
+    if sire_stats:
+        _calc(sire_stats, f"父{sire}", 1.0)
+    if dam_sire_stats:
+        _calc(dam_sire_stats, f"母父{dam_sire}", 0.6)
+
+    total = max(-4, min(8, total))
+    return total, " / ".join(parts)
 
 
 def _rating_label(score: int) -> str:

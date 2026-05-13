@@ -40,6 +40,8 @@ def predict():
                 past = data["results"]
                 horse["sire"] = data.get("sire", "")
                 horse["dam_sire"] = data.get("dam_sire", "")
+                horse["sire_stats"] = data.get("sire_stats", {})
+                horse["dam_sire_stats"] = data.get("dam_sire_stats", {})
             except Exception:
                 pass
         scored.append(calculate_score(horse, past))
