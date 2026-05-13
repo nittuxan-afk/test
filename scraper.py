@@ -297,9 +297,28 @@ def _try_extract_kinryo(row, horse: dict) -> None:
             pass
 
 
+def _fetch_ajax_html(endpoint: str, horse_id: str) -> "BeautifulSoup | None":
+    """AJAXエンドポイントからJSONを取得し、data フィールドのHTMLをBeautifulSoupで返す。"""
+    url = f"https://db.netkeiba.com/horse/{endpoint}"
+    params = {"input": "UTF-8", "output": "json", "id": horse_id}
+    try:
+        resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") == "OK":
+            time.sleep(REQUEST_INTERVAL)
+            return BeautifulSoup(data["data"], "html.parser")
+        logger.warning("AJAX status!=OK (%s, horse_id=%s): %s", endpoint, horse_id, data.get("status"))
+    except Exception as e:
+        logger.warning("AJAX取得失敗 (%s, horse_id=%s): %s", endpoint, horse_id, e)
+    return None
+
+
 def get_horse_past_results(horse_id: str, limit: int = 5) -> dict:
     """
-    db.netkeiba.com から過去成績と血統情報を取得する。
+    AJAXエンドポイントから過去成績と血統情報を取得する。
+    netkeibaの馬詳細ページは成績・血統をJSで動的挿入するため、
+    静的HTMLでなく専用AJAXを直接呼ぶ。
 
     Args:
         horse_id: 馬ID (例: '2019105678')
@@ -309,18 +328,18 @@ def get_horse_past_results(horse_id: str, limit: int = 5) -> dict:
         {'results': list[dict], 'sire': str, 'dam_sire': str}
         results の各辞書のキー: date, venue, finish(着順int)
     """
-    url = f"https://db.netkeiba.com/horse/{horse_id}/"
-    logger.info("過去成績取得: %s", url)
+    logger.info("過去成績取得 (horse_id=%s)", horse_id)
 
-    try:
-        soup = _fetch(url)
-    except requests.RequestException as e:
-        logger.warning("過去成績取得失敗 (horse_id=%s): %s", horse_id, e)
-        return {"results": [], "sire": "", "dam_sire": ""}
+    # 血統
+    pedigree_soup = _fetch_ajax_html("ajax_horse_pedigree.html", horse_id)
+    sire, dam_sire = _parse_pedigree(pedigree_soup) if pedigree_soup else ("", "")
 
-    sire, dam_sire = _parse_pedigree(soup)
+    # 成績
+    results_soup = _fetch_ajax_html("ajax_horse_results.html", horse_id)
+    if results_soup is None:
+        return {"results": [], "sire": sire, "dam_sire": dam_sire}
 
-    table = _find_results_table(soup)
+    table = _find_results_table(results_soup)
     if table is None:
         logger.warning("成績テーブルが見つかりません (horse_id=%s)", horse_id)
         return {"results": [], "sire": sire, "dam_sire": dam_sire}
