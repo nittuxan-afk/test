@@ -132,22 +132,24 @@ def _fill_odds_from_api(race_id: str, horses: list[dict]) -> None:
 
 
 def _parse_race_info(soup: BeautifulSoup, venue_code: str) -> dict:
-    """出走表ページからレース情報 (馬場・距離) を解析する。"""
-    info: dict = {"venue_code": venue_code, "surface": "", "distance": 0}
+    """出走表ページからレース情報 (馬場・距離・馬場状態) を解析する。"""
+    info: dict = {"venue_code": venue_code, "surface": "", "distance": 0, "track_condition": ""}
 
-    # 候補テキストを広く探す
-    # 対象: "芝1600m", "ダ1400m", "ダート1400m", "障1600m" 等
     surface_map = {"芝": "芝", "ダ": "ダート", "ダート": "ダート", "障": "障害"}
     pattern = re.compile(r"(芝|ダート|ダ|障)[\s　]*(\d{3,4})\s*m", re.IGNORECASE)
 
-    # RaceData01 / Race_Data / RaceData 等の div を優先して探す
     for cls_name in ("RaceData01", "Race_Data01", "RaceData", "Race_Data"):
         tag = soup.find(class_=cls_name)
         if tag:
-            m = pattern.search(tag.get_text())
+            text = tag.get_text()
+            m = pattern.search(text)
             if m:
                 info["surface"] = surface_map.get(m.group(1), m.group(1))
                 info["distance"] = int(m.group(2))
+                for tc in ("不良", "稍重", "重", "良"):  # 長い文字列を優先
+                    if tc in text:
+                        info["track_condition"] = tc
+                        break
                 return info
 
     # フォールバック: ページ全体のテキストから探す
@@ -696,10 +698,11 @@ def _parse_result_row(tds) -> dict | None:
         "date": tds[0].get_text(strip=True),
         "venue": tds[1].get_text(strip=True),
         "finish": 99,
-        "grade": "",    # G1 / G2 / G3 / 重賞 / ""
-        "surface": "",  # 芝 / ダート
-        "distance": 0,  # メートル
-        "pace": "",     # 逃 / 先 / 差 / 追
+        "grade": "",            # G1 / G2 / G3 / 重賞 / ""
+        "surface": "",          # 芝 / ダート
+        "distance": 0,          # メートル
+        "pace": "",             # 逃 / 先 / 差 / 追
+        "track_condition": "",  # 良 / 稍重 / 重 / 不良
     }
 
     # グレード (index 4: レース名)
@@ -728,6 +731,12 @@ def _parse_result_row(tds) -> dict | None:
     if len(tds) > 25:
         passage = tds[25].get_text(strip=True)
         result["pace"] = _extract_pace(passage)
+
+    # 馬場状態 (index 16: 良/稍重/重/不良)
+    if len(tds) > 16:
+        tc = tds[16].get_text(strip=True)
+        if tc in ("良", "稍重", "重", "不良"):
+            result["track_condition"] = tc
 
     # 馬体重 (index 28: e.g. "480(+4)" or "480")
     if len(tds) > 28:

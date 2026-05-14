@@ -285,6 +285,9 @@
               <span class="gb grade-{{ r.grades.weight_change }}">体重 {{ r.grades.weight_change }}</span>
               <span class="gb grade-{{ r.grades.course_fit }}">コース {{ r.grades.course_fit }}</span>
               <span class="gb grade-{{ r.grades.pedigree }}">血統 {{ r.grades.pedigree }}</span>
+              <span class="gb grade-{{ r.grades.post_position }}">枠番 {{ r.grades.post_position }}</span>
+              <span class="gb grade-{{ r.grades.track_condition }}">馬場 {{ r.grades.track_condition }}</span>
+              <span class="gb grade-{{ r.grades.pace_match }}">脚質 {{ r.grades.pace_match }}</span>
             </div>
           </td>
         </tr>
@@ -324,6 +327,21 @@
           <span class="bd-label">血統適性</span>
           <span class="bd-detail">{{ r.breakdown.pedigree[1] }}</span>
           <span class="bd-pts">{{ r.breakdown.pedigree[0] }}pt</span>
+        </div>
+        <div class="bd-row">
+          <span class="bd-label">枠番適性</span>
+          <span class="bd-detail">{{ r.breakdown.post_position[1] }}</span>
+          <span class="bd-pts">{{ r.breakdown.post_position[0] }}pt</span>
+        </div>
+        <div class="bd-row">
+          <span class="bd-label">馬場状態</span>
+          <span class="bd-detail">{{ r.breakdown.track_condition[1] }}</span>
+          <span class="bd-pts">{{ r.breakdown.track_condition[0] }}pt</span>
+        </div>
+        <div class="bd-row">
+          <span class="bd-label">脚質適性</span>
+          <span class="bd-detail">{{ r.breakdown.pace_match[1] }}</span>
+          <span class="bd-pts">{{ r.breakdown.pace_match[0] }}pt</span>
         </div>
       </div>
     </div>

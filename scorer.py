@@ -1,14 +1,18 @@
 """
 各種要素にスコアを付けて馬の予想順位を算出するモジュール。
 
-スコアの内訳 (最大70点):
+スコアの内訳 (最大84点):
   過去成績(3走): 0-30点  ※ G1/G2/G3は着順ポイントにグレード係数を乗算
-  馬体重変化   : 0-10点 (データなし時は5点)
+  馬体重変化   : 0-10点 (データなし時は5点、前走太め絞りはボーナス)
   コース適性   : 0-15点 (コースデータなし時は5点)
   血統適性     : -6~15点 (血統S該当時に+3ボーナス含む)
+  枠番適性     : 0-10点 (馬場×開催時期×産駒特性)
+  馬場状態適性 : 0-8点  (同条件の過去成績平均着順)
+  脚質マッチング: 0-6点  (レースのペース傾向との相性)
 """
 from course_data import score_course
 from pedigree_data import score_pedigree
+from post_position import score_post_position
 
 # グレード別の着順ポイント乗算係数
 GRADE_MULTIPLIER: dict[str, float] = {
@@ -99,11 +103,83 @@ def score_weight_change(change: int | None, past_results: list[dict] | None = No
         return 1, f"{label} (極端な増加)"
 
 
+def score_track_condition(current_cond: str, past_results: list[dict]) -> tuple[int, str]:
+    """同条件の過去成績平均着順から馬場状態適性スコアを算出する (0-8点)。"""
+    if not current_cond:
+        return 4, "馬場情報なし"
+    if not past_results:
+        return 4, f"{current_cond} (実績なし)"
+
+    same = [r for r in past_results if r.get("track_condition") == current_cond]
+    if not same:
+        return 4, f"{current_cond} 同条件実績なし"
+
+    finishes = [r["finish"] for r in same if r.get("finish", 99) <= 18]
+    if not finishes:
+        return 4, f"{current_cond} {len(same)}走 (着順不明)"
+
+    avg = sum(finishes) / len(finishes)
+    count = len(same)
+
+    if avg <= 2.0:
+        sc = 8
+    elif avg <= 3.5:
+        sc = 7
+    elif avg <= 5.0:
+        sc = 6
+    elif avg <= 7.0:
+        sc = 5
+    else:
+        sc = 2
+
+    return sc, f"{current_cond} {count}走 平均{avg:.1f}着"
+
+
+def calculate_pace_distribution(all_pasts: list[list[dict]]) -> dict[str, int]:
+    """全出走馬の直近1走脚質を集計して分布を返す。"""
+    dist: dict[str, int] = {"逃": 0, "先": 0, "差": 0, "追": 0}
+    for past in all_pasts:
+        if past:
+            pace = past[0].get("pace", "")
+            if pace in dist:
+                dist[pace] += 1
+    return dist
+
+
+def score_pace_match(horse_pace: str, pace_dist: dict[str, int]) -> tuple[int, str]:
+    """脚質マッチングスコア (0-6点)。ペース傾向と馬の脚質の相性を評価する。"""
+    if not horse_pace or not pace_dist:
+        return 3, "脚質データなし"
+
+    total = sum(pace_dist.values())
+    if total == 0:
+        return 3, "脚質データなし"
+
+    front = pace_dist.get("逃", 0) + pace_dist.get("先", 0)
+    ratio = front / total
+
+    if ratio >= 0.55:
+        adj = {"逃": -1, "先": 0, "差": 2, "追": 1}.get(horse_pace, 0)
+        pace_label = "前傾"
+    elif ratio <= 0.30:
+        adj = {"逃": 3, "先": 2, "差": -1, "追": -2}.get(horse_pace, 0)
+        pace_label = "スロー"
+    else:
+        adj = {"逃": 0, "先": 1, "差": 1, "追": 0}.get(horse_pace, 0)
+        pace_label = "平均"
+
+    sign = f"+{adj}" if adj >= 0 else str(adj)
+    return max(0, min(6, 3 + adj)), f"{horse_pace}({pace_label}ペース {sign})"
+
+
 _GRADE_THRESHOLDS: dict[str, list[tuple[int, str]]] = {
-    "past_results": [(25, "S"), (20, "A"), (14, "B"), (8, "C"), (0, "D")],
-    "weight_change": [(10, "S"), (8, "A"), (6, "B"), (3, "C"), (0, "D")],
-    "course_fit":    [(13, "S"), (10, "A"), (7, "B"), (5, "C"), (0, "D")],
-    "pedigree":      [(10, "S"), (7, "A"), (4, "B"), (0, "C"), (-99, "D")],
+    "past_results":    [(25, "S"), (20, "A"), (14, "B"), (8, "C"), (0, "D")],
+    "weight_change":   [(10, "S"), (8, "A"), (6, "B"), (3, "C"), (0, "D")],
+    "course_fit":      [(13, "S"), (10, "A"), (7, "B"), (5, "C"), (0, "D")],
+    "pedigree":        [(10, "S"), (7, "A"), (4, "B"), (0, "C"), (-99, "D")],
+    "post_position":   [(9, "S"), (7, "A"), (5, "B"), (3, "C"), (0, "D")],
+    "track_condition": [(7, "S"), (6, "A"), (5, "B"), (3, "C"), (0, "D")],
+    "pace_match":      [(5, "S"), (4, "A"), (3, "B"), (1, "C"), (0, "D")],
 }
 
 
@@ -119,19 +195,29 @@ def factor_grades(breakdown: dict) -> dict[str, str]:
     return grades
 
 
-def calculate_score(horse: dict, past_results: list[dict]) -> dict:
+def calculate_score(
+    horse: dict,
+    past_results: list[dict],
+    day_num: int = 1,
+    num_horses: int = 16,
+    pace_dist: dict | None = None,
+) -> dict:
     """
     1頭の総合スコアを計算する。
 
     Args:
         horse: scraper.get_race_entries() が返す馬辞書
-               (venue_code, surface, distance フィールドを含む)
+               (venue_code, surface, distance, track_condition フィールドを含む)
                sire_stats / dam_sire_stats は get_horse_past_results() が付与
         past_results: scraper.get_horse_past_results() が返す成績リスト
-                      各要素に grade / surface / distance / pace フィールドを含む
+                      各要素に grade / surface / distance / pace /
+                      track_condition / weight フィールドを含む
+        day_num   : 開催日数 (race_id[8:10] の整数値)
+        num_horses: 出走頭数
+        pace_dist : 全出走馬の脚質分布 (calculate_pace_distribution の返り値)
 
     Returns:
-        スコア情報辞書 (horse_number, horse_name, jockey, total_score, breakdown)
+        スコア情報辞書 (horse_number, horse_name, jockey, total_score, breakdown, grades)
     """
     past_score, past_label = score_past_results(past_results)
     weight_score, weight_label = score_weight_change(horse.get("weight_change"), past_results)
@@ -157,18 +243,42 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         pedigree_score += 3
         pedigree_label += " 【血統S+3】"
 
-    total = past_score + weight_score + course_score + pedigree_score
+    post_score, post_label = score_post_position(
+        horse.get("number", 0),
+        num_horses,
+        horse.get("surface", ""),
+        horse.get("distance", 0),
+        day_num,
+        horse.get("sire", ""),
+        horse.get("dam_sire", ""),
+    )
+
+    track_score, track_label = score_track_condition(
+        horse.get("track_condition", ""),
+        past_results,
+    )
+
+    horse_pace = past_results[0].get("pace", "") if past_results else ""
+    pace_score, pace_label = score_pace_match(horse_pace, pace_dist or {})
+
+    total = (
+        past_score + weight_score + course_score + pedigree_score
+        + post_score + track_score + pace_score
+    )
 
     breakdown = {
-        "past_results": (past_score, past_label),
-        "weight_change": (weight_score, weight_label),
-        "course_fit": (course_score, course_label),
-        "pedigree": (pedigree_score, pedigree_label),
+        "past_results":    (past_score, past_label),
+        "weight_change":   (weight_score, weight_label),
+        "course_fit":      (course_score, course_label),
+        "pedigree":        (pedigree_score, pedigree_label),
+        "post_position":   (post_score, post_label),
+        "track_condition": (track_score, track_label),
+        "pace_match":      (pace_score, pace_label),
     }
 
     grades = factor_grades(breakdown)
     grades["total"] = next(
-        letter for min_s, letter in [(55, "S"), (45, "A"), (35, "B"), (25, "C"), (0, "D")]
+        letter for min_s, letter in [(65, "S"), (52, "A"), (40, "B"), (28, "C"), (0, "D")]
         if total >= min_s
     )
 
