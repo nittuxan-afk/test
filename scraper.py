@@ -729,4 +729,11 @@ def _parse_result_row(tds) -> dict | None:
         passage = tds[25].get_text(strip=True)
         result["pace"] = _extract_pace(passage)
 
+    # 馬体重 (index 28: e.g. "480(+4)" or "480")
+    if len(tds) > 28:
+        wt_text = tds[28].get_text(strip=True)
+        m = re.match(r"(\d{3,4})", wt_text)
+        if m:
+            result["weight"] = int(m.group(1))
+
     return result

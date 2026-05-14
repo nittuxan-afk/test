@@ -85,7 +85,7 @@ def display(results: list[dict]) -> None:
         gb = g.get("pedigree", "-")
         print(f"{mark:^3} {r['rank']:>3}  {r['horse_number']:^4}  {name:<14} {jockey:<8} {odds_str:>6} {r['total_score']:>3}点[{gt}]  {gp:^2}   {gw:^2}    {gc:^2}   {gb:^2}")
 
-    print(f"\n  ※スコアの最高点: 約67点  評価基準: S=超優秀 A=優秀 B=普通 C=やや低 D=低\n")
+    print(f"\n  ※スコアの最高点: 約70点  評価基準: S=超優秀 A=優秀 B=普通 C=やや低 D=低\n")
 
     print("【 詳細スコア (上位5頭) 】")
     print("-" * 72)

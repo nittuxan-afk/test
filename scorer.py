@@ -1,11 +1,11 @@
 """
 各種要素にスコアを付けて馬の予想順位を算出するモジュール。
 
-スコアの内訳 (最大67点):
+スコアの内訳 (最大70点):
   過去成績(3走): 0-30点  ※ G1/G2/G3は着順ポイントにグレード係数を乗算
   馬体重変化   : 0-10点 (データなし時は5点)
   コース適性   : 0-15点 (コースデータなし時は5点)
-  血統適性     : -6~12点
+  血統適性     : -6~15点 (血統S該当時に+3ボーナス含む)
 """
 from course_data import score_course
 from pedigree_data import score_pedigree
@@ -59,8 +59,20 @@ def score_past_results(results: list[dict]) -> tuple[int, str]:
     return min(total_int, 30), detail
 
 
-def score_weight_change(change: int | None) -> tuple[int, str]:
-    """馬体重変化のスコア (0-10点)。変化が小さいほど高スコア。"""
+def _is_rebound_loss(past_results: list[dict] | None, threshold: int = 6) -> bool:
+    """前走が大幅増量だったか判定（今回の大幅減が「前走太め→絞り」かどうか）。"""
+    if not past_results or len(past_results) < 2:
+        return False
+    w0 = past_results[0].get("weight")
+    w1 = past_results[1].get("weight")
+    if w0 is None or w1 is None:
+        return False
+    return (w0 - w1) >= threshold
+
+
+def score_weight_change(change: int | None, past_results: list[dict] | None = None) -> tuple[int, str]:
+    """馬体重変化のスコア (0-10点)。変化が小さいほど高スコア。
+    大幅減の場合、前走が大幅増加（太め）なら絞り込みとしてボーナス評価する。"""
     if change is None:
         return 5, "計不・データなし"
     abs_c = abs(change)
@@ -74,9 +86,17 @@ def score_weight_change(change: int | None) -> tuple[int, str]:
     elif abs_c <= 8:
         return 6, f"{label} (中程度変動)"
     elif abs_c <= 12:
-        return 3, f"{label} (大幅変動)"
+        if change < 0:
+            if _is_rebound_loss(past_results):
+                return 7, f"{label} (前走太め→絞り込み)"
+            return 4, f"{label} (体重絞り)"
+        return 3, f"{label} (大幅増加)"
     else:
-        return 1, f"{label} (極端な変動)"
+        if change < 0:
+            if _is_rebound_loss(past_results):
+                return 5, f"{label} (前走大幅太め→絞り込み)"
+            return 2, f"{label} (大幅絞り)"
+        return 1, f"{label} (極端な増加)"
 
 
 _GRADE_THRESHOLDS: dict[str, list[tuple[int, str]]] = {
@@ -114,7 +134,7 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         スコア情報辞書 (horse_number, horse_name, jockey, total_score, breakdown)
     """
     past_score, past_label = score_past_results(past_results)
-    weight_score, weight_label = score_weight_change(horse.get("weight_change"))
+    weight_score, weight_label = score_weight_change(horse.get("weight_change"), past_results)
     course_score, course_label = score_course(
         horse.get("venue_code", ""),
         horse.get("surface", ""),
@@ -131,6 +151,11 @@ def calculate_score(horse: dict, past_results: list[dict]) -> dict:
         horse.get("sire_stats", {}),
         horse.get("dam_sire_stats", {}),
     )
+
+    # 血統Sボーナス: 父/母父が最高適性クラスの場合に加点
+    if pedigree_score >= 10:
+        pedigree_score += 3
+        pedigree_label += " 【血統S+3】"
 
     total = past_score + weight_score + course_score + pedigree_score
 
