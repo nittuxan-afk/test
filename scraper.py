@@ -2,7 +2,10 @@
 netkeiba.com から出走表・過去成績をスクレイピングするモジュール。
 利用にあたっては netkeiba の利用規約を確認してください。
 """
+import datetime
+import json
 import logging
+import pathlib
 import re
 import time
 
@@ -21,8 +24,31 @@ HEADERS = {
 }
 REQUEST_INTERVAL = 1.5  # サーバー負荷軽減のためリクエスト間隔(秒)
 
-# 種牡馬統計のインメモリキャッシュ（同一種牡馬の重複取得を防ぐ）
-_sire_stats_cache: dict[str, dict] = {}
+# 種牡馬統計の永続キャッシュ（実行をまたいで再利用）
+_SIRE_CACHE_FILE = pathlib.Path(__file__).parent / "sire_stats_cache.json"
+
+def _load_sire_cache() -> dict[str, dict]:
+    try:
+        return json.loads(_SIRE_CACHE_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _save_sire_cache(cache: dict[str, dict]) -> None:
+    try:
+        _SIRE_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.warning("種牡馬キャッシュ保存失敗: %s", e)
+
+# 起動時にファイルから読み込む
+_sire_stats_cache: dict[str, dict] = _load_sire_cache()
+
+# 騎手×会場統計キャッシュ（同一騎手の重複取得を防ぐ）
+_jockey_stats_cache: dict[str, float | None] = {}
+
+VENUE_CODE_TO_NAME: dict[str, str] = {
+    "01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
+    "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉",
+}
 
 
 def _fetch(url: str) -> BeautifulSoup:
@@ -131,6 +157,46 @@ def _fill_odds_from_api(race_id: str, horses: list[dict]) -> None:
         logger.warning("オッズAPI取得失敗: %s", e)
 
 
+def get_training_data(race_id: str) -> dict[int, dict]:
+    """
+    追い切り情報を取得して馬番→評価情報の辞書を返す。
+
+    Returns:
+        {horse_number: {"text": "好調持続", "grade": "B"}} の辞書
+        取得失敗・ページなし時は空辞書 {}
+    """
+    url = f"https://race.netkeiba.com/race/oikiri.html?race_id={race_id}"
+    logger.info("調教データ取得: %s", url)
+    try:
+        soup = _fetch(url)
+    except Exception as e:
+        logger.warning("調教データ取得失敗: %s", e)
+        return {}
+
+    table = soup.find("table", class_="OikiriTable")
+    if table is None:
+        logger.debug("OikiriTable が見つかりません (race_id=%s)", race_id)
+        return {}
+
+    result: dict[int, dict] = {}
+    for row in table.find_all("tr")[1:]:  # ヘッダー行をスキップ
+        cells = row.find_all(["th", "td"])
+        if len(cells) < 6:
+            continue
+        try:
+            horse_num = int(cells[1].get_text(strip=True))
+        except ValueError:
+            continue
+        eval_text = cells[4].get_text(strip=True)
+        grade = cells[5].get_text(strip=True)
+        if grade not in ("A", "B", "C"):
+            grade = ""
+        result[horse_num] = {"text": eval_text, "grade": grade}
+
+    logger.debug("調教データ取得: %d頭", len(result))
+    return result
+
+
 def _parse_race_info(soup: BeautifulSoup, venue_code: str) -> dict:
     """出走表ページからレース情報 (馬場・距離・馬場状態) を解析する。"""
     info: dict = {"venue_code": venue_code, "surface": "", "distance": 0, "track_condition": ""}
@@ -207,9 +273,16 @@ def _parse_entry_row(row) -> dict | None:
             a = td.find("a")
             if a:
                 horse["jockey"] = a.get_text(strip=True)
-                m = re.search(r"/jockey/\w+/(\w+)", a.get("href", ""))
-                if m:
-                    horse["jockey_id"] = m.group(1)
+                href = a.get("href", "")
+                for pat in (
+                    r"/jockey/(?:\w+/)+(\d+)/?$",  # .../recent/01140/
+                    r"[?&]id=(\d+)",                # ?id=01140
+                    r"jockey_id=(\w+)",             # ?jockey_id=01140
+                ):
+                    m = re.search(pat, href)
+                    if m:
+                        horse["jockey_id"] = m.group(1)
+                        break
             else:
                 horse["jockey"] = text
 
@@ -526,73 +599,110 @@ def _get_sire_stats(ped_id: str) -> dict:
         stats = {}
 
     _sire_stats_cache[ped_id] = stats
+    if stats:  # 有効データが取れた場合のみ永続保存
+        _save_sire_cache(_sire_stats_cache)
     return stats
 
 
 def _parse_sire_stats(soup: BeautifulSoup) -> dict:
     """
-    種牡馬ページから芝/ダート・距離カテゴリ別の勝利数を解析し、
-    優位な馬場・距離区分を返す。
+    種牡馬ページから芝/ダート・平均距離を解析し、優位な馬場・距離区分を返す。
+
+    ページ構造 (https://db.netkeiba.com/horse/sire/{ped_id}/):
+      Table 0: 種牡馬→産駒成績 (年度別)
+        ヘッダー: 年度 | 順位 | 出走頭数 | 勝馬頭数 | 出走回数 | 勝利回数 |
+                  重賞(出走/勝利) | 特別(出走/勝利) | 平場(出走/勝利) |
+                  芝(出走/勝利) | ダート(出走/勝利) | 勝馬率 | ... |
+                  平均距離(芝) | 平均距離(ダ) | 代表馬
+      累計行の 芝出走/勝利・ダート出走/勝利・平均距離 を使用。
     """
-    turf_wins = 0
-    dirt_wins = 0
-    short_wins = 0   # ≤1400m
-    middle_wins = 0  # 1500-2000m
-    long_wins = 0    # ≥2200m
+    # 「芝」「ダート」列ヘッダーを持つテーブルを探す
+    target_table = None
+    for t in soup.find_all("table"):
+        ths = [th.get_text(strip=True) for th in t.find_all("th")]
+        if "芝" in ths and "ダート" in ths:
+            target_table = t
+            break
+    if target_table is None:
+        return {}
 
-    # 芝/ダート・距離ラベルのマッピング
-    surface_labels = {"芝": "turf", "ダート": "dirt", "ダ": "dirt"}
-    distance_labels = {
-        "短距離": "short",
-        "マイル": "middle",
-        "中距離": "middle",
-        "中長距離": "long",
-        "長距離": "long",
-    }
+    rows = target_table.find_all("tr")
+    if len(rows) < 3:
+        return {}
 
-    for table in soup.find_all("table"):
-        rows = table.find_all("tr")
-        for row in rows:
-            cells = row.find_all(["th", "td"])
-            if not cells:
-                continue
-            label = cells[0].get_text(strip=True)
-            wins = _extract_wins_from_cells(cells)
-            if wins is None:
-                continue
+    # ヘッダー行1からcolspan展開してカラム位置を取得
+    col_map: dict[str, int] = {}
+    col_idx = 0
+    for cell in rows[0].find_all(["th", "td"]):
+        name = cell.get_text(strip=True)
+        col_map[name] = col_idx
+        col_idx += int(cell.get("colspan", 1))
 
-            if label in surface_labels:
-                if surface_labels[label] == "turf":
-                    turf_wins += wins
-                else:
-                    dirt_wins += wins
+    turf_col  = col_map.get("芝")
+    dirt_col  = col_map.get("ダート")
+    avg_t_col = col_map.get("平均距離(芝)")
+    avg_d_col = col_map.get("平均距離(ダ)")
 
-            elif label in distance_labels:
-                cat = distance_labels[label]
-                if cat == "short":
-                    short_wins += wins
-                elif cat == "middle":
-                    middle_wins += wins
-                else:
-                    long_wins += wins
+    if turf_col is None or dirt_col is None:
+        return {}
 
+    # 累計行からデータ取得
     result: dict = {}
+    for row in rows[2:]:
+        cells = row.find_all(["th", "td"])
+        if not cells or cells[0].get_text(strip=True) not in ("累計", "合計"):
+            continue
+        data = [c.get_text(strip=True).replace(",", "") for c in cells]
 
-    # 芝/ダート優位判定: 60%以上のシェアがある場合のみ断言
-    total_surf = turf_wins + dirt_wins
-    if total_surf >= 5:
-        turf_ratio = turf_wins / total_surf
-        if turf_ratio >= 0.60:
-            result["preferred_surface"] = "芝"
-        elif turf_ratio <= 0.40:
-            result["preferred_surface"] = "ダート"
+        def _int(i: int) -> int:
+            try:
+                return int(data[i]) if i < len(data) else 0
+            except ValueError:
+                return 0
 
-    # 距離優位判定: 最も勝利数が多いカテゴリ
-    dist_wins = {"短距離": short_wins, "中距離": middle_wins, "長距離": long_wins}
-    total_dist = sum(dist_wins.values())
-    if total_dist >= 5:
-        best_dist = max(dist_wins, key=lambda k: dist_wins[k])
-        result["preferred_distance"] = best_dist
+        def _float(i: int) -> float:
+            try:
+                return float(data[i]) if i is not None and i < len(data) else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        turf_starts = _int(turf_col)
+        turf_wins   = _int(turf_col + 1)
+        dirt_starts = _int(dirt_col)
+        dirt_wins   = _int(dirt_col + 1)
+
+        total = turf_starts + dirt_starts
+        if total >= 10:
+            turf_wr = turf_wins / turf_starts if turf_starts else 0
+            dirt_wr = dirt_wins / dirt_starts if dirt_starts else 0
+            if turf_starts / total >= 0.70:
+                result["preferred_surface"] = "芝"
+            elif dirt_starts / total >= 0.70:
+                result["preferred_surface"] = "ダート"
+            elif turf_wr >= dirt_wr * 1.5 and turf_wins >= 3:
+                result["preferred_surface"] = "芝"
+            elif dirt_wr >= turf_wr * 1.5 and dirt_wins >= 3:
+                result["preferred_surface"] = "ダート"
+
+        avg_turf = _float(avg_t_col) if avg_t_col is not None else 0.0
+        avg_dirt = _float(avg_d_col) if avg_d_col is not None else 0.0
+        # preferred_surfaceに合わせた距離、なければ両方の平均
+        if result.get("preferred_surface") == "芝" and avg_turf > 0:
+            avg_dist = avg_turf
+        elif result.get("preferred_surface") == "ダート" and avg_dirt > 0:
+            avg_dist = avg_dirt
+        else:
+            avg_dist = avg_turf if avg_turf > 0 else avg_dirt
+
+        if avg_dist > 0:
+            if avg_dist <= 1400:
+                result["preferred_distance"] = "短距離"
+            elif avg_dist <= 2000:
+                result["preferred_distance"] = "中距離"
+            else:
+                result["preferred_distance"] = "長距離"
+
+        break
 
     logger.debug("種牡馬統計解析結果: %s", result)
     return result
@@ -664,6 +774,36 @@ def _extract_grade(td) -> str:
     return ""
 
 
+_MARGIN_TO_SECONDS: dict[str, float] = {
+    "ハナ": 0.1, "アタマ": 0.1, "クビ": 0.2,
+    "1/2": 0.1, "3/4": 0.2, "大": 2.5,
+}
+
+
+def _parse_time_diff(text: str) -> float | None:
+    """着差テキストを秒(float)に変換する。勝ち馬は0.0、不明はNone。"""
+    text = text.strip()
+    if not text or text == "-":
+        return None  # データなし
+    if text in ("0", "0.0"):
+        return 0.0
+    try:
+        val = float(text)
+        return val if val >= 0 else None
+    except ValueError:
+        pass
+    # "1.1/2" → 1 + 1/2 馬身 のような表記
+    m = re.match(r"^(\d+)\.(\d+)/(\d+)$", text)
+    if m:
+        lengths = int(m.group(1)) + int(m.group(2)) / int(m.group(3))
+        return round(lengths * 0.2, 1)
+    # 純粋な分数 "1/2", "3/4"
+    m = re.match(r"^(\d+)/(\d+)$", text)
+    if m:
+        return round(int(m.group(1)) / int(m.group(2)) * 0.2, 1)
+    return _MARGIN_TO_SECONDS.get(text)
+
+
 def _extract_pace(passage: str) -> str:
     """
     通過順文字列（例: '4-4-4-3'）から4コーナー位置を取り出し脚質を推定する。
@@ -681,6 +821,90 @@ def _extract_pace(passage: str) -> str:
         return "差"
     else:
         return "追"
+
+
+_VENUE_COL_RE = re.compile(
+    r"\d+(札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)\d+"
+)
+
+
+def get_jockey_venue_stats(jockey_id: str, venue_code: str) -> float | None:
+    """
+    騎手の指定会場における直近2年の勝率を返す。
+    select.html?year=YYYY&mode=r1 を年ごとに最大5ページ取得して集計する。
+
+    Args:
+        jockey_id : 騎手ID (例: '01140')
+        venue_code: 競馬場コード (例: '05' = 東京)
+
+    Returns:
+        勝率 (0.0〜1.0)。出走5回未満またはデータなし時は None。
+    """
+    if not jockey_id or not venue_code:
+        return None
+    cache_key = f"{jockey_id}_{venue_code}"
+    if cache_key in _jockey_stats_cache:
+        return _jockey_stats_cache[cache_key]
+
+    venue_name = VENUE_CODE_TO_NAME.get(venue_code, "")
+    if not venue_name:
+        _jockey_stats_cache[cache_key] = None
+        return None
+
+    total_wins = total_starts = 0
+    current_year = datetime.date.today().year
+    for year in (current_year, current_year - 1):
+        try:
+            w, t = _fetch_jockey_venue_results(jockey_id, str(year), venue_name)
+            total_wins += w
+            total_starts += t
+        except Exception as e:
+            logger.warning("騎手成績取得失敗 (jockey_id=%s year=%s): %s", jockey_id, year, e)
+
+    win_rate = (total_wins / total_starts) if total_starts >= 5 else None
+    _jockey_stats_cache[cache_key] = win_rate
+    logger.debug(
+        "騎手統計: jockey_id=%s venue=%s wins=%d/%d rate=%s",
+        jockey_id, venue_name, total_wins, total_starts, win_rate,
+    )
+    return win_rate
+
+
+def _fetch_jockey_venue_results(jockey_id: str, year: str, venue_name: str) -> tuple[int, int]:
+    """
+    select.html から指定年・会場の成績を取得し (勝利数, 出走数) を返す。
+    開催列が '{数字}{会場名}{数字}' 形式 (例: '2東京6') であることを利用する。
+    """
+    wins = starts = 0
+    base_url = (
+        f"https://db.netkeiba.com/jockey/select.html"
+        f"?id={jockey_id}&year={year}&mode=r1"
+    )
+    for page in range(1, 6):  # 最大5ページ (100件) まで
+        url = base_url if page == 1 else f"{base_url}&page={page}"
+        soup = _fetch(url)
+        table = soup.find("table")
+        if not table:
+            break
+        rows = table.find_all("tr")[1:]  # ヘッダー行をスキップ
+        if not rows:
+            break
+
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
+            if len(cells) < 8:
+                continue
+            m = _VENUE_COL_RE.match(cells[1])
+            if not m or m.group(1) != venue_name:
+                continue
+            starts += 1
+            if cells[7] == "1":
+                wins += 1
+
+        if len(rows) < 20:  # 最終ページ
+            break
+
+    return wins, starts
 
 
 def _parse_result_row(tds) -> dict | None:
@@ -744,5 +968,9 @@ def _parse_result_row(tds) -> dict | None:
         m = re.match(r"(\d{3,4})", wt_text)
         if m:
             result["weight"] = int(m.group(1))
+
+    # 着差 (index 19: 1着との秒差 or 馬身表記)
+    if len(tds) > 19:
+        result["time_diff"] = _parse_time_diff(tds[19].get_text(strip=True))
 
     return result

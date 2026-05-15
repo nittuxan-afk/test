@@ -23,7 +23,7 @@ import argparse
 import logging
 import sys
 
-from scraper import get_horse_past_results, get_race_entries
+from scraper import get_horse_past_results, get_jockey_venue_stats, get_race_entries, get_training_data
 from scorer import calculate_pace_distribution, calculate_score, rank
 
 PREDICTION_MARKS = ["◎", "○", "▲", "△", "×"]
@@ -45,9 +45,10 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
     print(f"{len(horses)}頭の出走馬を取得しました\n")
 
     day_num = int(race_id[8:10]) if len(race_id) >= 10 else 1
+    venue_code = race_id[4:6] if len(race_id) >= 6 else ""
     num_horses = len(horses)
 
-    # Phase 1: 全馬の過去成績を取得
+    # Phase 1: 全馬の過去成績・騎手統計を取得
     all_pasts: list[list[dict]] = []
     for horse in horses:
         past: list[dict] = []
@@ -62,9 +63,30 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
                 horse["dam_sire_stats"] = data.get("dam_sire_stats", {})
             except Exception as e:
                 logging.warning("過去成績取得失敗: %s", e)
+
+        if use_history and horse.get("jockey_id"):
+            try:
+                horse["jockey_win_rate"] = get_jockey_venue_stats(horse["jockey_id"], venue_code)
+            except Exception as e:
+                logging.warning("騎手統計取得失敗: %s", e)
+
         all_pasts.append(past)
 
-    # Phase 2: 脚質分布を算出してスコアリング
+    # Phase 2: 調教データ取得
+    training_map: dict[int, dict] = {}
+    if use_history:
+        print("調教データを取得中...", flush=True)
+        try:
+            training_map = get_training_data(race_id)
+            if training_map:
+                print(f"  調教データ取得: {len(training_map)}頭\n", flush=True)
+            else:
+                print("  調教データなし（レース前週のみ取得可）\n", flush=True)
+        except Exception as e:
+            logging.warning("調教データ取得失敗: %s", e)
+            print("  調教データ取得失敗\n", flush=True)
+
+    # Phase 3: 脚質分布を算出してスコアリング
     pace_dist = calculate_pace_distribution(all_pasts)
 
     scored = []
@@ -74,6 +96,8 @@ def run(race_id: str, use_history: bool = True) -> list[dict]:
             day_num=day_num,
             num_horses=num_horses,
             pace_dist=pace_dist,
+            jockey_win_rate=horse.get("jockey_win_rate"),
+            training=training_map.get(int(horse.get("number", 0))),
         ))
 
     return rank(scored)
@@ -86,10 +110,10 @@ def display(results: list[dict]) -> None:
     print(f"{'='*80}")
     header = (
         f"{'印':^3} {'順':^3} {'馬番':^4} {'馬名':<14} {'騎手':<8} {'オッズ':>6} {'合計':>8}"
-        f"  過去 体重 コース 血統 枠番 馬場 脚質"
+        f"  過去 体重 コース 血統 枠番 馬場 脚質 騎手 調教"
     )
     print(header)
-    print("-" * 80)
+    print("-" * 92)
 
     for r in results:
         mark = PREDICTION_MARKS[r["rank"] - 1] if r["rank"] <= 5 else "  "
@@ -105,13 +129,15 @@ def display(results: list[dict]) -> None:
         gpp = g.get("post_position", "-")
         gtc = g.get("track_condition", "-")
         gpm = g.get("pace_match", "-")
+        gjv = g.get("jockey_venue", "-")
+        gtr = g.get("training", "-")
         print(
             f"{mark:^3} {r['rank']:>3}  {r['horse_number']:^4}  {name:<14} {jockey:<8}"
             f" {odds_str:>6} {r['total_score']:>3}点[{gt}]"
-            f"  {gp:^2}   {gw:^2}    {gc:^2}   {gb:^2}  {gpp:^2}   {gtc:^2}  {gpm:^2}"
+            f"  {gp:^2}   {gw:^2}    {gc:^2}   {gb:^2}  {gpp:^2}   {gtc:^2}  {gpm:^2}  {gjv:^2}  {gtr:^2}"
         )
 
-    print(f"\n  ※スコアの最高点: 約84点  評価基準: S=超優秀 A=優秀 B=普通 C=やや低 D=低\n")
+    print(f"\n  ※スコアの最高点: 約97点  評価基準: S=超優秀 A=優秀 B=普通 C=やや低 D=低\n")
 
     print("【 詳細スコア (上位5頭) 】")
     print("-" * 80)
@@ -130,12 +156,14 @@ def display(results: list[dict]) -> None:
         print(f"    枠番適性    : {bd['post_position'][0]:2d}点  {bd['post_position'][1]}")
         print(f"    馬場状態    : {bd['track_condition'][0]:2d}点  {bd['track_condition'][1]}")
         print(f"    脚質適性    : {bd['pace_match'][0]:2d}点  {bd['pace_match'][1]}")
+        print(f"    騎手×会場  : {bd['jockey_venue'][0]:2d}点  {bd['jockey_venue'][1]}")
+        print(f"    調教評価    : {bd['training'][0]:2d}点  {bd['training'][1]}")
         print(f"    合計        : {r['total_score']}点")
 
-    print(f"\n{'='*80}")
+    print(f"\n{'='*92}")
     print("注意: この予想はエンターテインメント目的です。")
     print("      馬券購入の判断はご自身でお願いします。")
-    print(f"{'='*80}\n")
+    print(f"{'='*92}\n")
 
 
 def main() -> None:
